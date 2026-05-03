@@ -13,15 +13,26 @@ async fn main() {
 
     // Determine what functionality to run
     let run_sql = cli.sql || cli.db_url.is_some();
-    let has_code_args = cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
+    let has_code_args =
+        cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
     let run_code = !run_sql || has_code_args; // Run code by default if no SQL, or if explicitly requested
 
     let mut output = String::new();
+    let mut context_found = false;
+
+    // Prepend prompt if provided
+    if let Some(prompt) = &cli.prompt {
+        output.push_str(prompt);
+        output.push_str("\n\n");
+    }
 
     // 1. Gather File/Code Context
     if run_code {
         match code::run(&cli) {
-            Ok(Some(code_out)) => output.push_str(&code_out),
+            Ok(Some(code_out)) => {
+                output.push_str(&code_out);
+                context_found = true;
+            }
             Ok(None) => log::info!("No file content found matching criteria."),
             Err(e) => log::error!("❌ Code scanner error: {:?}", e),
         }
@@ -35,15 +46,18 @@ async fn main() {
                     output.push_str("\n\n");
                 }
                 output.push_str(&sql_out);
+                context_found = true;
             }
             Ok(None) => log::info!("No database schema found."),
             Err(e) => log::error!("❌ SQL scanner error: {:?}", e),
         }
     }
 
-    if output.trim().is_empty() {
+    if !context_found {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
-    } else {
+    }
+
+    if !output.trim().is_empty() {
         println!("{}", output.trim());
     }
 }
