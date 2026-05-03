@@ -149,6 +149,42 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
     )
 }
 
+/// Smart detection for binary files. Reads the first 8KB to check for
+/// NULL bytes and evaluates the ratio of printable vs non-printable characters.
+fn is_binary_file(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut buffer = [0; 8192];
+    let n = file.read(&mut buffer)?;
+    let data = &buffer[..n];
+
+    if n == 0 {
+        return Ok(false); // Empty file is safely not binary
+    }
+
+    // 1. Fast check for NUL bytes (standard Git heuristic)
+    if data.contains(&0) {
+        return Ok(true);
+    }
+
+    // 2. Check ratio of control characters
+    // If more than 30% of the buffer is non-printable/control characters
+    // (excluding standard whitespace like \r, \n, \t, \x0C), we consider it binary.
+    let mut control_chars = 0;
+    for &byte in data {
+        if byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t' && byte != 0x0C {
+            control_chars += 1;
+        }
+    }
+
+    let ratio = control_chars as f32 / n as f32;
+    if ratio > 0.3 {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 pub struct OutputGenerator;
 
 impl OutputGenerator {
@@ -179,6 +215,25 @@ impl OutputGenerator {
                     continue;
                 }
 
+                // Smart binary detection heuristic
+                match is_binary_file(&entry.path) {
+                    Ok(true) => {
+                        blocks.push(format!(
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Binary file detected.\n</file>",
+                            entry.relative_path
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        blocks.push(format!(
+                            "<file path=\"{}\" error=\"true\">\nError checking file type: {}\n</file>",
+                            entry.relative_path, e
+                        ));
+                        continue;
+                    }
+                    Ok(false) => {}
+                }
+
                 match fs::read_to_string(&entry.path) {
                     Ok(content) => {
                         blocks.push(format!(
@@ -187,10 +242,17 @@ impl OutputGenerator {
                         ));
                     }
                     Err(e) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
-                            entry.relative_path, e
-                        ));
+                        if e.kind() == std::io::ErrorKind::InvalidData {
+                            blocks.push(format!(
+                                "<file path=\"{}\" skipped=\"true\">\nSkipped: Non-UTF-8 text / binary file detected.\n</file>",
+                                entry.relative_path
+                            ));
+                        } else {
+                            blocks.push(format!(
+                                "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
+                                entry.relative_path, e
+                            ));
+                        }
                     }
                 }
             }
