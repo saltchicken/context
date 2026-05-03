@@ -62,15 +62,18 @@ async fn main() {
         // Print the actual generated context to STDOUT
         println!("{}", trimmed_output);
 
-        // Calculate statistics
-        let lines = trimmed_output.lines().count();
-        // A common rough estimate for LLMs: 1 token ≈ 4 chars
-        let approx_tokens = trimmed_output.len() / 4;
+        // Skip printing stats if the user requested the tree view
+        if !cli.tree {
+            // Calculate statistics
+            let lines = trimmed_output.lines().count();
+            // A common rough estimate for LLMs: 1 token ≈ 4 chars
+            let approx_tokens = trimmed_output.len() / 4;
 
-        // Print stats to STDERR so it doesn't get piped to wl-copy or output files
-        eprintln!(
-            "\n✅ Context generated: {} lines, ~{} tokens",
-            lines, approx_tokens
-        );
+            // Print stats to STDERR so it doesn't get piped to wl-copy or output files
+            eprintln!(
+                "\n✅ Context generated: {} lines, ~{} tokens",
+                lines, approx_tokens
+            );
+        }
     }
 }
