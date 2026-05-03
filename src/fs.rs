@@ -55,24 +55,9 @@ fn load_presets_file() -> Result<PresetsFile> {
     if !config_path.exists() {
         // Try to create the default config directory and file
         if fs::create_dir_all(&context_dir).is_ok() {
-            let default_toml = r#"# Default presets for context CLI
+            // Embed the presets.example.toml at compile time
+            let default_toml = include_str!("../presets.example.toml");
 
-[global]
-# Global patterns applied to every run
-exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
-
-[rust]
-include = ["**/*.rs", "Cargo.toml"]
-exclude = ["Cargo.lock", "**/target/**"]
-
-[node]
-include = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "package.json", "tsconfig.json"]
-exclude = ["**/node_modules/**", "**/dist/**", "**/build/**"]
-
-[python]
-include = ["**/*.py", "requirements.txt", "pyproject.toml"]
-exclude = ["**/__pycache__/**", "**/.venv/**", "**/venv/**"]
-"#;
             if let Err(e) = fs::write(&config_path, default_toml) {
                 log::warn!("Failed to write default presets.toml: {}", e);
                 return Ok(PresetsFile::default());
