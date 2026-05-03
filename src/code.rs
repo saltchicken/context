@@ -23,6 +23,7 @@ struct PresetConfig {
 
 fn load_presets_file() -> Result<PresetsFile> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
+
     let config_path = home.join(".config").join("context").join("presets.toml");
 
     if !config_path.exists() {
@@ -115,9 +116,16 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
 }
 
 pub fn run(args: &Cli) -> Result<Option<String>> {
-    let current_dir = env::current_dir().context("Failed to get current directory")?;
+    let target_dir = if let Some(config_name) = &args.config {
+        dirs::home_dir()
+            .context("Could not determine home directory")?
+            .join(".config")
+            .join(config_name)
+    } else {
+        let current_dir = env::current_dir().context("Failed to get current directory")?;
+        current_dir.join(&args.path)
+    };
 
-    let target_dir = current_dir.join(&args.path);
     let target_dir = target_dir.canonicalize().unwrap_or(target_dir);
 
     if !target_dir.exists() {

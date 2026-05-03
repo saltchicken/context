@@ -12,6 +12,14 @@ pub struct Cli {
     #[arg(default_value = ".")]
     pub path: String,
 
+    /// Prepend a prompt to the generated context
+    #[arg(short, long)]
+    pub prompt: Option<String>,
+
+    /// Shortcut to scan a specific folder inside ~/.config (e.g., --config nvim)
+    #[arg(long)]
+    pub config: Option<String>,
+
     /// Include database schema context (reads DB_URL from env)
     #[arg(long)]
     pub sql: bool,
