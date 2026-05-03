@@ -1,10 +1,14 @@
+use anyhow::Result;
 use clap::Parser;
 use context::cli::Cli;
 use context::{db, fs};
 use env_logger::Env;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
+    // Load environment variables first so log filters (e.g., RUST_LOG) are applied correctly.
+    dotenvy::dotenv().ok();
+
     // Initialize logging (default to info if not set)
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
@@ -34,7 +38,7 @@ async fn main() {
                 context_found = true;
             }
             Ok(None) => log::info!("No file content found matching criteria."),
-            Err(e) => log::error!("❌ Code scanner error: {:?}", e),
+            Err(e) => log::error!("❌ Code scanner error: {:#}", e),
         }
     }
 
@@ -49,7 +53,7 @@ async fn main() {
                 context_found = true;
             }
             Ok(None) => log::info!("No database schema found."),
-            Err(e) => log::error!("❌ SQL scanner error: {:?}", e),
+            Err(e) => log::error!("❌ SQL scanner error: {:#}", e),
         }
     }
 
@@ -71,9 +75,11 @@ async fn main() {
 
             // Print stats to STDERR so it doesn't get piped to wl-copy or output files
             eprintln!(
-                "✅ Context generated: {} lines, ~{} tokens",
+                "\n✅ Context generated: {} lines, ~{} tokens",
                 lines, approx_tokens
             );
         }
     }
+
+    Ok(())
 }

@@ -31,6 +31,7 @@ pub struct RuntimeConfig {
     pub exclude: Vec<String>,
     pub include_in_tree: Vec<String>,
     pub tree_only_output: bool,
+    pub max_size: u64,
 }
 
 /// Represents a single file discovered during the scan.
@@ -41,12 +42,12 @@ pub struct FileEntry {
     pub depth: usize,
     pub is_dir: bool,
     pub include_content: bool,
+    pub exceeds_size: bool,
 }
 
 fn load_presets_file() -> Result<PresetsFile> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-
-    let config_path = home.join(".config").join("context").join("presets.toml");
+    let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+    let config_path = config_dir.join("context").join("presets.toml");
 
     if !config_path.exists() {
         return Ok(PresetsFile::default());
@@ -76,6 +77,7 @@ pub fn build_config(
     exclude: Option<Vec<String>>,
     include_in_tree: Option<Vec<String>>,
     tree_only: bool,
+    max_size: u64,
 ) -> Result<RuntimeConfig> {
     let presets_file = load_presets_file()?;
 
@@ -122,6 +124,7 @@ pub fn build_config(
         exclude: final_exclude,
         include_in_tree: final_include_in_tree,
         tree_only_output: tree_only,
+        max_size,
     })
 }
 
@@ -134,6 +137,7 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
         args.exclude.clone(),
         args.include_in_tree.clone(),
         args.tree,
+        args.max_size,
     )
 }
 
@@ -159,6 +163,14 @@ impl OutputGenerator {
 
         for entry in entries {
             if entry.include_content {
+                if entry.exceeds_size {
+                    blocks.push(format!(
+                        "<file path=\"{}\" error=\"true\">\nError: File exceeds maximum size limit.\n</file>",
+                        entry.relative_path
+                    ));
+                    continue;
+                }
+
                 match fs::read_to_string(&entry.path) {
                     Ok(content) => {
                         blocks.push(format!(
@@ -168,7 +180,7 @@ impl OutputGenerator {
                     }
                     Err(e) => {
                         blocks.push(format!(
-                            "<file path=\"{}\" error=\"true\">Error reading file: {}</file>",
+                            "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
                             entry.relative_path, e
                         ));
                     }
@@ -199,6 +211,7 @@ pub struct Scanner {
     include_set: GlobSet,
     exclude_set: GlobSet,
     tree_only_set: GlobSet,
+    max_size: u64,
 }
 
 impl Scanner {
@@ -208,6 +221,7 @@ impl Scanner {
             include_set: build_globset(&config.include)?,
             exclude_set: build_globset(&config.exclude)?,
             tree_only_set: build_globset(&config.include_in_tree)?,
+            max_size: config.max_size,
         })
     }
 
@@ -250,7 +264,10 @@ impl Scanner {
             return None;
         }
 
-        let is_dir = path.is_dir();
+        let metadata = path.metadata().ok()?;
+        let is_dir = metadata.is_dir();
+        let size = metadata.len();
+
         let matches_include = self.include_set.is_match(&relative);
         let matches_tree = self.tree_only_set.is_match(&relative);
 
@@ -266,6 +283,7 @@ impl Scanner {
             depth,
             is_dir,
             include_content: !is_dir && matches_include && !matches_tree,
+            exceeds_size: size > self.max_size,
         })
     }
 }
@@ -303,9 +321,8 @@ pub fn generate(config: RuntimeConfig, root: PathBuf) -> Result<String> {
 
 pub fn run(args: &Cli) -> Result<Option<String>> {
     let target_dir = if let Some(config_name) = &args.config {
-        dirs::home_dir()
-            .context("Could not determine home directory")?
-            .join(".config")
+        dirs::config_dir()
+            .context("Could not determine config directory")?
             .join(config_name)
     } else {
         let current_dir = env::current_dir().context("Failed to get current directory")?;

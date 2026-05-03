@@ -14,9 +14,6 @@ pub struct AppConfig {
 }
 
 pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
-    // Load environment variables from .env file if present
-    dotenvy::dotenv().ok();
-
     let db_url = cli
         .db_url
         .clone()
@@ -24,7 +21,6 @@ pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
         .context("DB_URL must be set via --db-url or in .env/environment variables")?;
 
     let db_name = db_url.split('/').last().unwrap_or("Unknown").to_string();
-
     let ignore_tables = cli.exclude.clone().unwrap_or_default();
 
     Ok(AppConfig {
@@ -186,12 +182,15 @@ impl<'a> Inspector<'a> {
     ) -> Result<Vec<String>> {
         let mut select_parts = Vec::new();
         for col in columns {
+            // Escape quotes inside column identifiers safely
+            let safe_col_name = col.column_name.replace('"', "\"\"");
+
             if col.data_type == "bytea" {
-                select_parts.push(format!("'[bytea]'::text AS \"{}\"", col.column_name));
+                select_parts.push(format!("'[bytea]'::text AS \"{}\"", safe_col_name));
             } else if col.udt_name == "vector" {
-                select_parts.push(format!("'[vector]'::text AS \"{}\"", col.column_name));
+                select_parts.push(format!("'[vector]'::text AS \"{}\"", safe_col_name));
             } else {
-                select_parts.push(format!("\"{}\"", col.column_name));
+                select_parts.push(format!("\"{}\"", safe_col_name));
             }
         }
 
@@ -200,9 +199,10 @@ impl<'a> Inspector<'a> {
         }
 
         let select_list = select_parts.join(", ");
+        let safe_table_name = table_name.replace('"', "\"\"");
         let data_query = format!(
             "SELECT row_to_json(t)::text FROM (SELECT {} FROM \"{}\" LIMIT 5) t",
-            select_list, table_name
+            select_list, safe_table_name
         );
 
         let rows = sqlx::query(&data_query)
@@ -210,6 +210,7 @@ impl<'a> Inspector<'a> {
             .fetch_all(self.pool)
             .await
             .unwrap_or_default();
+
         Ok(rows)
     }
 }
@@ -294,7 +295,9 @@ pub async fn generate_report(config: &AppConfig) -> Result<String> {
     let inspector = Inspector::new(&pool, config.collect_samples, config.ignore_tables.clone());
     let table_data = inspector.scan().await?;
 
-    let output = OutputGenerator::generate_markdown(&config.db_name, &table_data)?;
+    let output = OutputGenerator::generate_markdown(&config.db_name, &table_data)
+        .map_err(|e| anyhow::anyhow!("Formatting error: {}", e))?;
+
     Ok(output)
 }
 
