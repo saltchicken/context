@@ -57,7 +57,20 @@ async fn main() {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
     }
 
-    if !output.trim().is_empty() {
-        println!("{}", output.trim());
+    let trimmed_output = output.trim();
+    if !trimmed_output.is_empty() {
+        // Print the actual generated context to STDOUT
+        println!("{}", trimmed_output);
+
+        // Calculate statistics
+        let lines = trimmed_output.lines().count();
+        // A common rough estimate for LLMs: 1 token ≈ 4 chars
+        let approx_tokens = trimmed_output.len() / 4;
+
+        // Print stats to STDERR so it doesn't get piped to wl-copy or output files
+        eprintln!(
+            "\n✅ Context generated: {} lines, ~{} tokens",
+            lines, approx_tokens
+        );
     }
 }
