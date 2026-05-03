@@ -32,6 +32,8 @@ pub struct RuntimeConfig {
     pub include_in_tree: Vec<String>,
     pub tree_only_output: bool,
     pub max_size: u64,
+    pub max_files: usize,
+    pub force: bool,
 }
 
 /// Represents a single file discovered during the scan.
@@ -78,6 +80,8 @@ pub fn build_config(
     include_in_tree: Option<Vec<String>>,
     tree_only: bool,
     max_size: u64,
+    max_files: usize,
+    force: bool,
 ) -> Result<RuntimeConfig> {
     let presets_file = load_presets_file()?;
 
@@ -125,6 +129,8 @@ pub fn build_config(
         include_in_tree: final_include_in_tree,
         tree_only_output: tree_only,
         max_size,
+        max_files,
+        force,
     })
 }
 
@@ -138,6 +144,8 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
         args.include_in_tree.clone(),
         args.tree,
         args.max_size,
+        args.max_files,
+        args.force,
     )
 }
 
@@ -212,6 +220,7 @@ pub struct Scanner {
     exclude_set: GlobSet,
     tree_only_set: GlobSet,
     max_size: u64,
+    max_files: usize,
 }
 
 impl Scanner {
@@ -222,6 +231,7 @@ impl Scanner {
             exclude_set: build_globset(&config.exclude)?,
             tree_only_set: build_globset(&config.include_in_tree)?,
             max_size: config.max_size,
+            max_files: config.max_files,
         })
     }
 
@@ -234,6 +244,11 @@ impl Scanner {
             .build();
 
         for result in walker {
+            if entries.len() >= self.max_files {
+                log::warn!("⚠️ Reached maximum file limit ({}). Stopping scan early to prevent memory exhaustion.", self.max_files);
+                break;
+            }
+
             match result {
                 Ok(entry) => {
                     if let Some(processed) = self.process_entry(entry.path()) {
@@ -337,6 +352,20 @@ pub fn run(args: &Cli) -> Result<Option<String>> {
 
     let project_name = target_dir.file_name().and_then(|n| n.to_str());
     let config = resolve_config(args, project_name)?;
+
+    // SAFEGUARD: Prevent scanning home or root directories without --force
+    if !config.force {
+        if let Some(home) = dirs::home_dir() {
+            if target_dir == home.canonicalize().unwrap_or_else(|_| home.clone()) {
+                anyhow::bail!("Cowardly refusing to scan the entire home directory. Use --force to override, or specify a narrower path/include pattern.");
+            }
+        }
+        if target_dir == PathBuf::from("/") {
+            anyhow::bail!(
+                "Cowardly refusing to scan the entire root directory. Use --force to override."
+            );
+        }
+    }
 
     let output = generate(config, target_dir)?;
 

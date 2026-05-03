@@ -45,6 +45,14 @@ pub struct Cli {
     #[arg(long, default_value = "1048576", help_heading = "File Scanning")]
     pub max_size: u64,
 
+    /// Stop scanning after this many files to prevent out-of-memory issues (default: 10000)
+    #[arg(long, default_value = "10000", help_heading = "File Scanning")]
+    pub max_files: usize,
+
+    /// Force scanning of sensitive directories (like home or root)
+    #[arg(long, help_heading = "File Scanning")]
+    pub force: bool,
+
     /// Include database schema context (reads DB_URL from env)
     #[arg(long, help_heading = "Database Options")]
     pub sql: bool,
