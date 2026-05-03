@@ -1,6 +1,6 @@
 use clap::Parser;
 use context::cli::Cli;
-use context::{code, sql};
+use context::{db, fs};
 use env_logger::Env;
 
 #[tokio::main]
@@ -12,10 +12,10 @@ async fn main() {
     let cli = Cli::parse();
 
     // Determine what functionality to run
-    let run_sql = cli.sql || cli.db_url.is_some();
+    let run_db = cli.sql || cli.db_url.is_some();
     let has_code_args =
         cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
-    let run_code = !run_sql || has_code_args; // Run code by default if no SQL, or if explicitly requested
+    let run_fs = !run_db || has_code_args; // Run code by default if no SQL, or if explicitly requested
 
     let mut output = String::new();
     let mut context_found = false;
@@ -27,8 +27,8 @@ async fn main() {
     }
 
     // 1. Gather File/Code Context
-    if run_code {
-        match code::run(&cli) {
+    if run_fs {
+        match fs::run(&cli) {
             Ok(Some(code_out)) => {
                 output.push_str(&code_out);
                 context_found = true;
@@ -39,8 +39,8 @@ async fn main() {
     }
 
     // 2. Gather SQL Context
-    if run_sql {
-        match sql::run(&cli).await {
+    if run_db {
+        match db::run(&cli).await {
             Ok(Some(sql_out)) => {
                 if !output.is_empty() {
                     output.push_str("\n\n");
