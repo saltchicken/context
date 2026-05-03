@@ -60,7 +60,7 @@ async fn main() {
     let trimmed_output = output.trim();
     if !trimmed_output.is_empty() {
         // Print the actual generated context to STDOUT
-        println!("{}", trimmed_output);
+        print!("{}", trimmed_output);
 
         // Skip printing stats if the user requested the tree view
         if !cli.tree {
@@ -71,7 +71,7 @@ async fn main() {
 
             // Print stats to STDERR so it doesn't get piped to wl-copy or output files
             eprintln!(
-                "\n✅ Context generated: {} lines, ~{} tokens",
+                "✅ Context generated: {} lines, ~{} tokens",
                 lines, approx_tokens
             );
         }
