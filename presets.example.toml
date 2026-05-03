@@ -6,7 +6,8 @@ exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 
 [rust]
 include = ["**/*.rs", "Cargo.toml"]
-exclude = ["Cargo.lock", "**/target/**"]
+exclude = ["**/target/**"]
+include_in_tree = ["Cargo.lock"]
 
 [node]
 include = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "package.json", "tsconfig.json"]
