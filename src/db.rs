@@ -182,7 +182,6 @@ impl<'a> Inspector<'a> {
     ) -> Result<Vec<String>> {
         let mut select_parts = Vec::new();
         for col in columns {
-            // Escape quotes inside column identifiers safely
             let safe_col_name = col.column_name.replace('"', "\"\"");
 
             if col.data_type == "bytea" {
@@ -215,70 +214,83 @@ impl<'a> Inspector<'a> {
     }
 }
 
+/// Escapes characters that are illegal in XML attributes and text nodes
+fn escape_xml(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 pub struct OutputGenerator;
 
 impl OutputGenerator {
-    pub fn generate_markdown(
-        db_name: &str,
-        tables: &[TableData],
-    ) -> Result<String, std::fmt::Error> {
+    pub fn generate_xml(tables: &[TableData]) -> Result<String, std::fmt::Error> {
         let mut output = String::new();
 
-        writeln!(output, "Database Schema for: {}\n", db_name)?;
-
         for table in tables {
-            writeln!(output, "## Table: {}", table.name)?;
+            writeln!(output, "<table name=\"{}\">", escape_xml(&table.name))?;
 
             if let Some(comment) = &table.comment {
-                writeln!(output, "\n**Description:** {}\n", comment.trim())?;
-            } else {
-                writeln!(output)?;
-            }
-
-            writeln!(output, "| Column | Type | Nullable | Description |")?;
-            writeln!(output, "|---|---|---|---|")?;
-            for col in &table.columns {
-                let clean_comment = col
-                    .comment
-                    .as_deref()
-                    .unwrap_or("")
-                    .replace('\n', " ")
-                    .replace('|', "\\|");
-
                 writeln!(
                     output,
-                    "| {} | {} | {} | {} |",
-                    col.column_name, col.data_type, col.is_nullable, clean_comment
+                    "  <description>{}</description>",
+                    escape_xml(comment.trim())
                 )?;
             }
+
+            writeln!(output, "  <columns>")?;
+            for col in &table.columns {
+                let mut col_tag = format!(
+                    "    <column name=\"{}\" type=\"{}\" nullable=\"{}\"",
+                    escape_xml(&col.column_name),
+                    escape_xml(&col.data_type),
+                    escape_xml(&col.is_nullable)
+                );
+
+                // Keep the column comment strictly inside an attribute for cleaner structure
+                if let Some(comment) = &col.comment {
+                    col_tag.push_str(&format!(" description=\"{}\"", escape_xml(comment.trim())));
+                }
+
+                col_tag.push_str(" />");
+                writeln!(output, "{}", col_tag)?;
+            }
+            writeln!(output, "  </columns>")?;
 
             if !table.primary_keys.is_empty() {
                 writeln!(
                     output,
-                    "\n**Primary Key:** {}",
-                    table.primary_keys.join(", ")
+                    "  <primary_key>{}</primary_key>",
+                    escape_xml(&table.primary_keys.join(", "))
                 )?;
             }
 
             if !table.foreign_keys.is_empty() {
-                writeln!(output, "\n**Foreign Keys:**")?;
+                writeln!(output, "  <foreign_keys>")?;
                 for fk in &table.foreign_keys {
                     writeln!(
                         output,
-                        "- `{}.{}` -> `{}.{}`",
-                        table.name, fk.column_name, fk.foreign_table_name, fk.foreign_column_name
+                        "    <foreign_key column=\"{}\" foreign_table=\"{}\" foreign_column=\"{}\" />",
+                        escape_xml(&fk.column_name),
+                        escape_xml(&fk.foreign_table_name),
+                        escape_xml(&fk.foreign_column_name)
                     )?;
                 }
+                writeln!(output, "  </foreign_keys>")?;
             }
 
             if !table.sample_rows.is_empty() {
-                writeln!(output, "\n**Sample Data (Top 5 rows):**")?;
+                writeln!(output, "  <sample_data>")?;
                 for row in &table.sample_rows {
-                    writeln!(output, "- `{}`", row)?;
+                    writeln!(output, "    <row>{}</row>", escape_xml(row))?;
                 }
+                writeln!(output, "  </sample_data>")?;
             }
 
-            writeln!(output, "\n---\n")?;
+            writeln!(output, "</table>\n")?;
         }
 
         Ok(output)
@@ -295,7 +307,7 @@ pub async fn generate_report(config: &AppConfig) -> Result<String> {
     let inspector = Inspector::new(&pool, config.collect_samples, config.ignore_tables.clone());
     let table_data = inspector.scan().await?;
 
-    let output = OutputGenerator::generate_markdown(&config.db_name, &table_data)
+    let output = OutputGenerator::generate_xml(&table_data)
         .map_err(|e| anyhow::anyhow!("Formatting error: {}", e))?;
 
     Ok(output)
@@ -307,6 +319,9 @@ pub async fn run(args: &Cli) -> Result<Option<String>> {
     if output.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(output))
+        Ok(Some(format!(
+            "<database_schema>\n{}\n</database_schema>",
+            output.trim_end()
+        )))
     }
 }

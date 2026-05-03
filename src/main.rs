@@ -19,7 +19,13 @@ async fn main() -> Result<()> {
     let run_db = cli.sql || cli.db_url.is_some();
     let has_code_args =
         cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
-    let run_fs = !run_db || has_code_args; // Run code by default if no SQL, or if explicitly requested
+
+    // Run file scanner if:
+    // 1. Explicitly requested via code arguments (has_code_args)
+    // 2. The user passed --sql (which defaults to pulling both file and sql context)
+    // 3. No database flags were provided at all (!run_db)
+    // This implies using --db-url exclusively will only pull SQL context.
+    let run_fs = has_code_args || cli.sql || !run_db;
 
     let mut output = String::new();
     let mut context_found = false;
@@ -64,7 +70,7 @@ async fn main() -> Result<()> {
     let trimmed_output = output.trim();
     if !trimmed_output.is_empty() {
         // Print the actual generated context to STDOUT
-        print!("{}", trimmed_output);
+        println!("{}", trimmed_output);
 
         // Skip printing stats if the user requested the tree view
         if !cli.tree {
