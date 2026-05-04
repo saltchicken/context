@@ -16,14 +16,7 @@ pub fn load_config() -> Result<UserConfig> {
 
     if !config_path.exists() {
         if fs::create_dir_all(&context_dir).is_ok() {
-            let default_toml = r#"# Context configuration file
-
-# Default output format (xml, markdown, json)
-# format = "xml"
-
-# Automatically find and use the root of the git project
-# git_root = false
-"#;
+            let default_toml = include_str!("../config.example.toml");
             if let Err(e) = fs::write(&config_path, default_toml) {
                 log::warn!("Failed to write default config.toml: {}", e);
             } else {
