@@ -20,7 +20,9 @@ exclude = [
     "**/*.min.js",
     "**/*.min.css",
     "**/*.min.js.map",
-    "**/*.min.css.map"
+    "**/*.min.css.map",
+    "**/package-lock.json",
+    "**/pnpm-lock.yaml",
 ]
 
 [rust]
