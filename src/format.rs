@@ -77,7 +77,7 @@ fn escape_xml(input: &str) -> Cow<'_, str> {
 fn estimate_capacity(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> usize {
     let mut cap = 0;
     if let Some(p) = prompt {
-        cap += p.len() + 4;
+        cap += p.len() + 32; // Added capacity for wrapper tags or headers
     }
     if let Some(fs) = fs {
         cap += fs.tree.len() + 64;
@@ -100,8 +100,9 @@ fn format_xml(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]
     let mut out = String::with_capacity(capacity);
 
     if let Some(p) = prompt {
+        out.push_str("<prompt>\n");
         out.push_str(p);
-        out.push_str("\n\n");
+        out.push_str("\n</prompt>\n\n");
     }
 
     if let Some(fs) = fs {
@@ -211,6 +212,7 @@ fn format_markdown(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[Table
     let mut out = String::with_capacity(capacity);
 
     if let Some(p) = prompt {
+        out.push_str("## Prompt\n\n");
         out.push_str(p);
         out.push_str("\n\n");
     }
