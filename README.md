@@ -20,7 +20,7 @@ To install `context`, you will need the Rust toolchain installed.
 
 ```bash
 # Clone the repository
-git clone [https://github.com/yourusername/context.git](https://github.com/yourusername/context.git)
+git clone https://github.com/saltchicken/context.git](https://github.com/saltchicken/context.git)
 cd context
 
 # Build and install
