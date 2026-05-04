@@ -1,7 +1,5 @@
-# Context configuration file
-
 # Default output format (xml, markdown, json)
-# format = "xml"
+format = "xml"
 
 # Automatically find and use the root of the git project
-# git_root = false
+git_root = false
