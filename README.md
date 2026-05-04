@@ -131,11 +131,11 @@ Define reusable scanning patterns.
 [global]
 exclude = ["**/docs/**"]
 
-[presets.rust]
+[rust]
 include = ["**/*.rs", "Cargo.toml"]
 exclude = ["target/**"]
 
-[presets.web]
+[web]
 include = ["**/*.ts", "**/*.tsx", "**/*.css"]
 include_in_tree = ["package.json"]
 
