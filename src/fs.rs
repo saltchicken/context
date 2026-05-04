@@ -310,7 +310,15 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
     for entry in entries {
         let indent = "    ".repeat(entry.depth.saturating_sub(1));
         let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
-        let marker = if entry.is_dir { "/" } else { "" };
+
+        let marker = if entry.is_dir {
+            "/"
+        } else if !entry.include_content {
+            " (content excluded)"
+        } else {
+            ""
+        };
+
         tree_out.push_str(&format!("{}{}{}\n", indent, name, marker));
     }
 
