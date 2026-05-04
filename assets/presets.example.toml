@@ -2,6 +2,7 @@
 
 [global]
 # Global patterns applied to every run
+include = ["README.md"]
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 
 [rust]
