@@ -1,6 +1,6 @@
 [global]
 # Global patterns applied to every run
-include = ["README.md"]
+include = ["**/README.md"]
 exclude = [
     "**/.git/**",
     "**/node_modules/**",
@@ -22,7 +22,7 @@ exclude = [
     "**/*.min.js.map",
     "**/*.min.css.map",
     "**/package-lock.json",
-    "**/pnpm-lock.yaml",
+    "**/pnpm-lock.yaml"
 ]
 
 [rust]
