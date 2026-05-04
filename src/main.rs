@@ -9,27 +9,6 @@ async fn main() -> Result<()> {
     // Parse the unified global CLI options first so we can check for flags like --quiet
     let mut cli = Cli::parse();
 
-    // Evaluate the target path early to load project-specific .env files
-    let initial_target = if let Some(config_name) = &cli.config {
-        dirs::config_dir().unwrap_or_default().join(config_name)
-    } else {
-        std::env::current_dir().unwrap_or_default().join(&cli.path)
-    };
-
-    let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
-
-    if cli.git_root {
-        if let Some(git_root) = fs::find_git_root(&target_dir) {
-            target_dir = git_root;
-        }
-    }
-
-    // Try to load .env from the target directory
-    dotenvy::from_path(target_dir.join(".env")).ok();
-
-    // Fallback to standard CWD dotenv
-    dotenvy::dotenv().ok();
-
     // Initialize logging (default to warn if quiet is enabled, otherwise info)
     let default_log_level = if cli.quiet { "warn" } else { "info" };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level)).init();
@@ -50,6 +29,15 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or(user_config.format.unwrap_or(format::OutputFormat::Xml));
 
+    // Resolve target directory after merging config and CLI arguments
+    let target_dir = fs::resolve_target_dir(&cli)?;
+
+    // Try to load .env from the target directory
+    dotenvy::from_path(target_dir.join(".env")).ok();
+
+    // Fallback to standard CWD dotenv
+    dotenvy::dotenv().ok();
+
     // Determine what functionality to run
     let run_db = cli.sql || cli.db_url.is_some();
     let has_code_args =
@@ -68,7 +56,7 @@ async fn main() -> Result<()> {
 
     // 1. Gather File/Code Context
     if run_fs {
-        match fs::gather(&cli) {
+        match fs::gather(&target_dir, &cli) {
             Ok(Some(data)) => {
                 fs_data = Some(data);
                 context_found = true;

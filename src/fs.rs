@@ -382,7 +382,8 @@ pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn gather(args: &Cli) -> Result<Option<FsData>> {
+/// Resolves the intended target directory from CLI inputs and applies git root discovery
+pub fn resolve_target_dir(args: &Cli) -> Result<PathBuf> {
     let initial_target = if let Some(config_name) = &args.config {
         dirs::config_dir()
             .context("Could not determine config directory")?
@@ -405,6 +406,10 @@ pub fn gather(args: &Cli) -> Result<Option<FsData>> {
         }
     }
 
+    Ok(target_dir)
+}
+
+pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
     if !target_dir.exists() {
         anyhow::bail!("Target directory does not exist: {:?}", target_dir);
     }
@@ -425,7 +430,7 @@ pub fn gather(args: &Cli) -> Result<Option<FsData>> {
         }
     }
 
-    let scanner = Scanner::new(target_dir.clone(), &config)?;
+    let scanner = Scanner::new(target_dir.to_path_buf(), &config)?;
     let entries = scanner.scan();
 
     if entries.is_empty() {
