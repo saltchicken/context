@@ -130,6 +130,16 @@ pub fn build_config(
         "**/*.so".into(),
         "**/*.zip".into(),
         "**/*.tar.gz".into(),
+        "**/*.gz".into(),
+        "**/*.tar".into(),
+        "**/*.tgz".into(),
+        "**/*.tar.xz".into(),
+        "**/*.xz".into(),
+        "**/*.tar".into(),
+        "**/*.min.js".into(),
+        "**/*.min.css".into(),
+        "**/*.min.js.map".into(),
+        "**/*.min.css.map".into(),
     ];
 
     let final_exclude = combine_lists(vec![
