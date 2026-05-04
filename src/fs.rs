@@ -163,22 +163,11 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
     )
 }
 
-/// Smart detection for binary files. Reads the first 8KB to check for
-/// NULL bytes and evaluates the ratio of printable vs non-printable characters.
-fn is_binary_file(path: &Path) -> std::io::Result<bool> {
-    use std::io::Read;
-    let mut file = fs::File::open(path)?;
-    let mut buffer = [0; 8192];
-    let n = file.read(&mut buffer)?;
-    let data = &buffer[..n];
-
-    if n == 0 {
-        return Ok(false); // Empty file is safely not binary
-    }
-
+/// Helper to detect binary data based on a slice of bytes.
+fn is_binary_bytes(data: &[u8]) -> bool {
     // 1. Fast check for NUL bytes (standard Git heuristic)
     if data.contains(&0) {
-        return Ok(true);
+        return true;
     }
 
     // 2. Check ratio of control characters
@@ -191,12 +180,45 @@ fn is_binary_file(path: &Path) -> std::io::Result<bool> {
         }
     }
 
-    let ratio = control_chars as f32 / n as f32;
-    if ratio > 0.3 {
-        return Ok(true);
+    let ratio = control_chars as f32 / data.len() as f32;
+    ratio > 0.3
+}
+
+enum FileReadResult {
+    Text(String),
+    Binary,
+    NonUtf8,
+}
+
+/// Reads a file while simultaneously performing a fast binary check to prevent double file I/O.
+fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+
+    // Read the first 8KB into our chunk buffer to test for binary
+    let mut chunk = [0; 8192];
+    let n = file.read(&mut chunk)?;
+
+    if n == 0 {
+        return Ok(FileReadResult::Text(String::new())); // Empty file is safely not binary
     }
 
-    Ok(false)
+    if is_binary_bytes(&chunk[..n]) {
+        return Ok(FileReadResult::Binary); // Abort early; no need to keep reading
+    }
+
+    // Seed our final buffer with the first verified chunk
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(&chunk[..n]);
+
+    // Read the rest of the file using the already open file descriptor
+    file.read_to_end(&mut buffer)?;
+
+    // Attempt to convert the full buffer into a valid UTF-8 String
+    match String::from_utf8(buffer) {
+        Ok(s) => Ok(FileReadResult::Text(s)),
+        Err(_) => Ok(FileReadResult::NonUtf8),
+    }
 }
 
 pub struct OutputGenerator;
@@ -229,44 +251,31 @@ impl OutputGenerator {
                     continue;
                 }
 
-                // Smart binary detection heuristic
-                match is_binary_file(&entry.path) {
-                    Ok(true) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Binary file detected.\n</file>",
-                            entry.relative_path
-                        ));
-                        continue;
-                    }
-                    Err(e) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" error=\"true\">\nError checking file type: {}\n</file>",
-                            entry.relative_path, e
-                        ));
-                        continue;
-                    }
-                    Ok(false) => {}
-                }
-
-                match fs::read_to_string(&entry.path) {
-                    Ok(content) => {
+                // Single I/O check handling binary heuristics and text parsing safely
+                match read_text_file(&entry.path) {
+                    Ok(FileReadResult::Text(content)) => {
                         blocks.push(format!(
                             "<file path=\"{}\">\n{}\n</file>",
                             entry.relative_path, content
                         ));
                     }
+                    Ok(FileReadResult::Binary) => {
+                        blocks.push(format!(
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Binary file detected.\n</file>",
+                            entry.relative_path
+                        ));
+                    }
+                    Ok(FileReadResult::NonUtf8) => {
+                        blocks.push(format!(
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Non-UTF-8 text / binary file detected.\n</file>",
+                            entry.relative_path
+                        ));
+                    }
                     Err(e) => {
-                        if e.kind() == std::io::ErrorKind::InvalidData {
-                            blocks.push(format!(
-                                "<file path=\"{}\" skipped=\"true\">\nSkipped: Non-UTF-8 text / binary file detected.\n</file>",
-                                entry.relative_path
-                            ));
-                        } else {
-                            blocks.push(format!(
-                                "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
-                                entry.relative_path, e
-                            ));
-                        }
+                        blocks.push(format!(
+                            "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
+                            entry.relative_path, e
+                        ));
                     }
                 }
             }
