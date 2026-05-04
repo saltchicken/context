@@ -1,0 +1,136 @@
+# 🧠 Context
+
+**A universal tool to gather file, codebase, and database context for Large Language Models (LLMs).**
+
+`context` is a powerful, highly-configurable CLI application written in Rust. It is designed to instantly aggregate your project's directory structure, file contents, and database schemas into an optimized format (`XML`, `Markdown`, or `JSON`) ready to be pasted into prompts for models like GPT-4, Claude, or Gemini.
+
+## ✨ Features
+
+- **📁 File & Directory Scanning:** Automatically builds structural trees and extracts file contents. Respects `.gitignore` by default.
+- **🗄️ Database Introspection:** Native support for PostgreSQL (`sqlx`). Extracts schemas, column types, primary/foreign keys, and optional sample data.
+- **📝 Multiple Output Formats:** Choose between `<xml>` (best for Claude/Gemini), Markdown (best for ChatGPT), or JSON (for programmatic parsing).
+- **⚙️ High Configurability:** Define global configurations (`config.toml`), setup reusable scan patterns (`presets.toml`), or use robust CLI arguments.
+- **🚀 Safe & Efficient:** Written in Rust with Tokio. Built-in guardrails (max file sizes, max file limits, auto-binary detection) prevent context window blowouts.
+
+---
+
+## 📦 Installation
+
+To install `context`, you will need the Rust toolchain installed.
+
+```bash
+# Clone the repository
+git clone [https://github.com/yourusername/context.git](https://github.com/yourusername/context.git)
+cd context
+
+# Build and install
+cargo install --path .
+```
+
+---
+
+## 🚀 Usage
+
+Navigate to your project directory and run `context`. The tool outputs directly to `stdout`, making it incredibly easy to pipe into your clipboard using `pbcopy`, `xclip`, or `wl-copy`.
+
+```bash
+# Basic scan of the current directory (outputs XML by default)
+context | pbcopy
+
+# Specify a target directory and output as Markdown
+context /path/to/project --format markdown | pbcopy
+```
+
+### 🎯 Prepending a Prompt
+You can include instructions for the LLM directly via the CLI:
+```bash
+context --prompt "Analyze this Rust project for memory leaks and suggest improvements."
+```
+
+---
+
+## 🗄️ Database Context
+
+Context can connect directly to your PostgreSQL database to provide LLMs with your active schema and table relationships.
+
+```bash
+# Provide the connection string directly
+context --db-url "postgres://user:password@localhost:5432/mydb"
+
+# Or use an environment variable / .env file and trigger SQL scan
+context --sql
+
+# Include 5 sample rows of data per table for better LLM understanding
+context --sql --samples
+```
+
+---
+
+## 🛠️ Options & Flags
+
+`context` provides granular control over what gets included in the context window.
+
+| Flag / Option | Description |
+| :--- | :--- |
+| `[PATH]` | Path to scan for files (defaults to `.`). |
+| `--format <FORMAT>` | Output format: `xml`, `markdown`, or `json`. |
+| `--prompt <PROMPT>` | Prepend a text prompt to the generated output. |
+| `--quiet`, `-q` | Suppress stderr output (info/stats logs). |
+| `--git-root` | Intelligently find and use the root of the git project as the scan path. |
+| `--tree` | Show *only* the directory tree structure (no file contents). |
+| `--include <GLOBS>` | Patterns for files to include content (e.g. `**/*.rs`). |
+| `--exclude <GLOBS>` | Patterns to exclude (e.g. `tests/**`, or table names in SQL mode). |
+| `--include-in-tree` | Patterns for files to show in the structural tree, but skip contents. |
+| `--max-size <BYTES>` | Skip files larger than this size in bytes (default: `1048576` / 1MB). |
+| `--max-files <COUNT>` | Stop scanning after this many files (default: `10000`). |
+| `--force` | Bypass safety checks to force scanning sensitive directories (like `/` or `~`). |
+| `--preset <NAME>` | Use a predefined set of include/exclude rules from `presets.toml`. |
+| `--config <NAME>` | Scan a specific folder inside your OS config directory (e.g., `--config nvim`). |
+
+### Filtering Example
+Include only Rust source files, exclude the `benches` directory, and show `Cargo.toml` in the file tree without extracting its text content:
+```bash
+context --include "**/*.rs" --exclude "benches/**" --include-in-tree "Cargo.toml"
+```
+
+---
+
+## ⚙️ Configuration
+
+`context` creates a configuration folder in your OS's default config directory (e.g., `~/.config/context/` on Linux/macOS or `%APPDATA%\context\` on Windows).
+
+### `config.toml`
+Set your global default preferences.
+```toml
+# ~/.config/context/config.toml
+format = "markdown"
+git_root = true
+```
+
+### `presets.toml`
+Define reusable scanning patterns.
+```toml
+# ~/.config/context/presets.toml
+
+[global]
+exclude = ["**/docs/**"]
+
+[presets.rust]
+include = ["**/*.rs", "Cargo.toml"]
+exclude = ["target/**"]
+
+[presets.web]
+include = ["**/*.ts", "**/*.tsx", "**/*.css"]
+include_in_tree = ["package.json"]
+```
+Run using: `context --preset rust`
+
+---
+
+## 🛡️ Built-in Safeguards
+To prevent accidentally flooding the LLM or freezing the process:
+- **Binary & Non-UTF-8 Detection:** Automatically skipped.
+- **Large File Limits:** Skips files > 1MB by default (`--max-size`).
+- **File Counts:** Caps total file processing to 10,000 (`--max-files`).
+- **Dangerous Path Protections:** Refuses to indiscriminately scan `/` or `~` without the `--force` flag.
+    
