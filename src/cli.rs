@@ -1,3 +1,4 @@
+use crate::format::OutputFormat;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -12,6 +13,10 @@ pub struct Cli {
     /// Path to scan for files (defaults to current directory)
     #[arg(default_value = ".")]
     pub path: PathBuf,
+
+    /// Choose the output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Xml, help_heading = "Output Options")]
+    pub format: OutputFormat,
 
     /// Prepend a prompt to the generated context
     #[arg(short, long)]

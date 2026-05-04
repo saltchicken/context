@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use context::cli::Cli;
-use context::{db, fs};
+use context::{db, format, fs};
 use env_logger::Env;
 
 #[tokio::main]
@@ -27,20 +27,15 @@ async fn main() -> Result<()> {
     // This implies using --db-url exclusively will only pull SQL context.
     let run_fs = has_code_args || cli.sql || !run_db;
 
-    let mut output = String::new();
+    let mut fs_data = None;
+    let mut db_data = None;
     let mut context_found = false;
-
-    // Prepend prompt if provided
-    if let Some(prompt) = &cli.prompt {
-        output.push_str(prompt);
-        output.push_str("\n\n");
-    }
 
     // 1. Gather File/Code Context
     if run_fs {
-        match fs::run(&cli) {
-            Ok(Some(code_out)) => {
-                output.push_str(&code_out);
+        match fs::gather(&cli) {
+            Ok(Some(data)) => {
+                fs_data = Some(data);
                 context_found = true;
             }
             Ok(None) => log::info!("No file content found matching criteria."),
@@ -50,12 +45,9 @@ async fn main() -> Result<()> {
 
     // 2. Gather SQL Context
     if run_db {
-        match db::run(&cli).await {
-            Ok(Some(sql_out)) => {
-                if !output.is_empty() {
-                    output.push_str("\n\n");
-                }
-                output.push_str(&sql_out);
+        match db::gather(&cli).await {
+            Ok(Some(data)) => {
+                db_data = Some(data);
                 context_found = true;
             }
             Ok(None) => log::info!("No database schema found."),
@@ -63,16 +55,25 @@ async fn main() -> Result<()> {
         }
     }
 
-    if !context_found {
+    // Checking if we got nothing out of both processes AND there's no custom prompt
+    if !context_found && cli.prompt.is_none() {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
     }
 
+    // Build the final output applying the selected format abstraction
+    let output = format::format_output(
+        &cli.format,
+        cli.prompt.as_deref(),
+        fs_data.as_ref(),
+        db_data.as_deref(),
+    );
     let trimmed_output = output.trim();
+
     if !trimmed_output.is_empty() {
         // Print the actual generated context to STDOUT
         println!("{}", trimmed_output);
 
-        // Skip printing stats if the user requested the tree view
+        // Skip printing stats if the user requested the tree view exclusively
         if !cli.tree {
             // Calculate statistics
             let lines = trimmed_output.lines().count();

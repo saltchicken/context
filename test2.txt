@@ -1,0 +1,1136 @@
+Abstract the formatting out of fs.rs and db.rs. I want to be able to specify markdown, json, or xml to format the context. The default should be xml
+
+<directory_structure>
+Cargo.lock
+Cargo.toml
+src/
+    cli.rs
+    db.rs
+    format.rs
+    fs.rs
+    lib.rs
+    main.rs
+</directory_structure>
+
+<file_contents>
+<file path="Cargo.toml">
+[package]
+name = "context"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "1"
+ignore = "0.4"
+globset = "0.4"
+anyhow = "1.0"
+dirs = "6.0"
+pathdiff = "0.2"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json"] }
+dotenvy = "0.15"
+
+</file>
+
+<file path="src/cli.rs">
+use crate::format::OutputFormat;
+use clap::Parser;
+use std::path::PathBuf;
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "context",
+    author,
+    version,
+    about = "A universal tool to gather file, codebase, and database context for LLMs"
+)]
+pub struct Cli {
+    /// Path to scan for files (defaults to current directory)
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Choose the output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Xml, help_heading = "Output Options")]
+    pub format: OutputFormat,
+
+    /// Prepend a prompt to the generated context
+    #[arg(short, long)]
+    pub prompt: Option<String>,
+
+    /// Shortcut to scan a specific folder inside your OS config directory (e.g., --config nvim)
+    #[arg(long, help_heading = "File Scanning")]
+    pub config: Option<String>,
+
+    /// Use a predefined set of options from presets.toml
+    #[arg(long, help_heading = "File Scanning")]
+    pub preset: Option<String>,
+
+    /// Show only the directory tree structure (code context)
+    #[arg(long, help_heading = "File Scanning")]
+    pub tree: bool,
+
+    /// Patterns for files to include for content (e.g., '**/*.rs')
+    #[arg(long, num_args = 1.., help_heading = "File Scanning")]
+    pub include: Option<Vec<String>>,
+
+    /// Patterns for files to show in tree but without content
+    #[arg(long, num_args = 1.., help_heading = "File Scanning")]
+    pub include_in_tree: Option<Vec<String>>,
+
+    /// Patterns to exclude (files/directories for code, or table names for SQL)
+    #[arg(long, num_args = 1.., help_heading = "File Scanning")]
+    pub exclude: Option<Vec<String>>,
+
+    /// Skip files larger than this size in bytes (default: 1MB)
+    #[arg(long, default_value = "1048576", help_heading = "File Scanning")]
+    pub max_size: u64,
+
+    /// Stop scanning after this many files to prevent out-of-memory issues (default: 10000)
+    #[arg(long, default_value = "10000", help_heading = "File Scanning")]
+    pub max_files: usize,
+
+    /// Force scanning of sensitive directories (like home or root)
+    #[arg(long, help_heading = "File Scanning")]
+    pub force: bool,
+
+    /// Include database schema context (reads DB_URL from env)
+    #[arg(long, help_heading = "Database Options")]
+    pub sql: bool,
+
+    /// Optional database connection string (triggers --sql automatically)
+    #[arg(long, help_heading = "Database Options")]
+    pub db_url: Option<String>,
+
+    /// Collect sample rows from tables (SQL mode only)
+    #[arg(long, help_heading = "Database Options")]
+    pub samples: bool,
+}
+
+</file>
+
+<file path="src/db.rs">
+use crate::cli::Cli;
+use anyhow::{Context, Result};
+use serde::Serialize;
+use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::{FromRow, Row};
+use std::env;
+
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub db_url: String,
+    pub db_name: String,
+    pub collect_samples: bool,
+    pub ignore_tables: Vec<String>,
+}
+
+pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
+    let db_url = cli
+        .db_url
+        .clone()
+        .or_else(|| env::var("DB_URL").ok())
+        .context("DB_URL must be set via --db-url or in .env/environment variables")?;
+
+    let db_name = db_url.split('/').last().unwrap_or("Unknown").to_string();
+    let ignore_tables = cli.exclude.clone().unwrap_or_default();
+
+    Ok(AppConfig {
+        db_url,
+        db_name,
+        collect_samples: cli.samples,
+        ignore_tables,
+    })
+}
+
+#[derive(FromRow, Debug, Clone, Serialize)]
+pub struct ColumnInfo {
+    pub column_name: String,
+    pub data_type: String,
+    pub is_nullable: String,
+    pub udt_name: String,
+    pub comment: Option<String>,
+}
+
+#[derive(FromRow, Debug, Clone, Serialize)]
+pub struct ForeignKeyInfo {
+    pub column_name: String,
+    pub foreign_table_name: String,
+    pub foreign_column_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TableData {
+    pub name: String,
+    pub comment: Option<String>,
+    pub columns: Vec<ColumnInfo>,
+    pub primary_keys: Vec<String>,
+    pub foreign_keys: Vec<ForeignKeyInfo>,
+    pub sample_rows: Vec<String>,
+}
+
+pub struct Inspector<'a> {
+    pool: &'a sqlx::PgPool,
+    collect_samples: bool,
+    ignore_tables: Vec<String>,
+}
+
+impl<'a> Inspector<'a> {
+    pub fn new(pool: &'a sqlx::PgPool, collect_samples: bool, ignore_tables: Vec<String>) -> Self {
+        Self {
+            pool,
+            collect_samples,
+            ignore_tables,
+        }
+    }
+
+    pub async fn scan(&self) -> Result<Vec<TableData>> {
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut results = Vec::new();
+
+        for (table_name,) in tables {
+            if self.ignore_tables.contains(&table_name) {
+                continue;
+            }
+
+            let table_comment: Option<String> = sqlx::query_scalar(
+                "SELECT pg_catalog.obj_description(format('%I.%I', 'public', $1)::regclass::oid, 'pg_class')"
+            )
+            .bind(&table_name)
+            .fetch_one(self.pool)
+            .await?;
+
+            let columns = self.get_columns(&table_name).await?;
+            let primary_keys = self.get_primary_keys(&table_name).await?;
+            let foreign_keys = self.get_foreign_keys(&table_name).await?;
+
+            let sample_rows = if self.collect_samples {
+                self.get_sample_data(&table_name, &columns).await?
+            } else {
+                Vec::new()
+            };
+
+            results.push(TableData {
+                name: table_name,
+                comment: table_comment,
+                columns,
+                primary_keys,
+                foreign_keys,
+                sample_rows,
+            });
+        }
+
+        Ok(results)
+    }
+
+    async fn get_columns(&self, table_name: &str) -> Result<Vec<ColumnInfo>> {
+        sqlx::query_as::<_, ColumnInfo>(
+            r#"
+            SELECT 
+                column_name, 
+                data_type, 
+                is_nullable, 
+                udt_name,
+                pg_catalog.col_description(format('%I.%I', table_schema, table_name)::regclass::oid, ordinal_position) as comment
+            FROM information_schema.columns 
+            WHERE table_name = $1 AND table_schema = 'public'
+            ORDER BY ordinal_position
+            "#,
+        )
+        .bind(table_name)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|e| e.into())
+    }
+
+    async fn get_primary_keys(&self, table_name: &str) -> Result<Vec<String>> {
+        let result: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
+            WHERE tc.constraint_type = 'PRIMARY KEY' 
+              AND tc.table_name = $1
+            "#,
+        )
+        .bind(table_name)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(result.into_iter().map(|(name,)| name).collect())
+    }
+
+    async fn get_foreign_keys(&self, table_name: &str) -> Result<Vec<ForeignKeyInfo>> {
+        sqlx::query_as::<_, ForeignKeyInfo>(
+            r#"
+            SELECT
+                kcu.column_name,
+                ccu.table_name AS foreign_table_name,
+                ccu.column_name AS foreign_column_name
+            FROM information_schema.key_column_usage AS kcu
+            JOIN information_schema.referential_constraints AS rc
+                ON kcu.constraint_name = rc.constraint_name
+            JOIN information_schema.constraint_column_usage AS ccu
+                ON rc.unique_constraint_name = ccu.constraint_name
+            WHERE kcu.table_name = $1
+            "#,
+        )
+        .bind(table_name)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|e| e.into())
+    }
+
+    async fn get_sample_data(
+        &self,
+        table_name: &str,
+        columns: &[ColumnInfo],
+    ) -> Result<Vec<String>> {
+        let mut select_parts = Vec::new();
+        for col in columns {
+            let safe_col_name = col.column_name.replace('"', "\"\"");
+
+            if col.data_type == "bytea" {
+                select_parts.push(format!("'[bytea]'::text AS \"{}\"", safe_col_name));
+            } else if col.udt_name == "vector" {
+                select_parts.push(format!("'[vector]'::text AS \"{}\"", safe_col_name));
+            } else {
+                select_parts.push(format!("\"{}\"", safe_col_name));
+            }
+        }
+
+        if select_parts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let select_list = select_parts.join(", ");
+        let safe_table_name = table_name.replace('"', "\"\"");
+        let data_query = format!(
+            "SELECT row_to_json(t)::text FROM (SELECT {} FROM \"{}\" LIMIT 5) t",
+            select_list, safe_table_name
+        );
+
+        let rows = sqlx::query(&data_query)
+            .map(|row: PgRow| row.get::<String, _>(0))
+            .fetch_all(self.pool)
+            .await
+            .unwrap_or_default();
+
+        Ok(rows)
+    }
+}
+
+pub async fn gather(args: &Cli) -> Result<Option<Vec<TableData>>> {
+    let config = resolve_config(args)?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&config.db_url)
+        .await
+        .context("Failed to connect to database")?;
+
+    let inspector = Inspector::new(&pool, config.collect_samples, config.ignore_tables.clone());
+    let table_data = inspector.scan().await?;
+
+    if table_data.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(table_data))
+    }
+}
+
+</file>
+
+<file path="src/format.rs">
+use crate::db::TableData;
+use crate::fs::{FileData, FsData};
+use clap::ValueEnum;
+use serde::Serialize;
+
+#[derive(ValueEnum, Clone, Default, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    #[default]
+    Xml,
+    Markdown,
+    Json,
+}
+
+#[derive(Serialize)]
+struct JsonOutput<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directory_structure: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<&'a [FileData]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database_schema: Option<&'a [TableData]>,
+}
+
+pub fn format_output(
+    format: &OutputFormat,
+    prompt: Option<&str>,
+    fs: Option<&FsData>,
+    db: Option<&[TableData]>,
+) -> String {
+    match format {
+        OutputFormat::Xml => format_xml(prompt, fs, db),
+        OutputFormat::Markdown => format_markdown(prompt, fs, db),
+        OutputFormat::Json => format_json(prompt, fs, db),
+    }
+}
+
+fn escape_xml(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn format_xml(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
+    let mut out = String::new();
+
+    if let Some(p) = prompt {
+        out.push_str(p);
+        out.push_str("\n\n");
+    }
+
+    if let Some(fs) = fs {
+        out.push_str("<directory_structure>\n");
+        out.push_str(&fs.tree);
+        out.push_str("\n</directory_structure>\n\n");
+
+        if !fs.files.is_empty() {
+            out.push_str("<file_contents>\n");
+            for f in &fs.files {
+                if let Some(err) = &f.error {
+                    out.push_str(&format!(
+                        "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n\n",
+                        escape_xml(&f.path),
+                        escape_xml(err)
+                    ));
+                } else if let Some(skip) = &f.skipped {
+                    out.push_str(&format!(
+                        "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n\n",
+                        escape_xml(&f.path),
+                        escape_xml(skip)
+                    ));
+                } else if let Some(content) = &f.content {
+                    out.push_str(&format!(
+                        "<file path=\"{}\">\n{}\n</file>\n\n",
+                        escape_xml(&f.path),
+                        content
+                    ));
+                }
+            }
+            out.push_str("</file_contents>\n\n");
+        }
+    }
+
+    if let Some(db) = db {
+        out.push_str("<database_schema>\n");
+        for table in db {
+            out.push_str(&format!("<table name=\"{}\">\n", escape_xml(&table.name)));
+
+            if let Some(comment) = &table.comment {
+                out.push_str(&format!(
+                    "  <description>{}</description>\n",
+                    escape_xml(comment.trim())
+                ));
+            }
+
+            out.push_str("  <columns>\n");
+            for col in &table.columns {
+                let mut col_tag = format!(
+                    "    <column name=\"{}\" type=\"{}\" nullable=\"{}\"",
+                    escape_xml(&col.column_name),
+                    escape_xml(&col.data_type),
+                    escape_xml(&col.is_nullable)
+                );
+                if let Some(comment) = &col.comment {
+                    col_tag.push_str(&format!(" description=\"{}\"", escape_xml(comment.trim())));
+                }
+                col_tag.push_str(" />\n");
+                out.push_str(&col_tag);
+            }
+            out.push_str("  </columns>\n");
+
+            if !table.primary_keys.is_empty() {
+                out.push_str(&format!(
+                    "  <primary_key>{}</primary_key>\n",
+                    escape_xml(&table.primary_keys.join(", "))
+                ));
+            }
+
+            if !table.foreign_keys.is_empty() {
+                out.push_str("  <foreign_keys>\n");
+                for fk in &table.foreign_keys {
+                    out.push_str(&format!(
+                        "    <foreign_key column=\"{}\" foreign_table=\"{}\" foreign_column=\"{}\" />\n",
+                        escape_xml(&fk.column_name),
+                        escape_xml(&fk.foreign_table_name),
+                        escape_xml(&fk.foreign_column_name)
+                    ));
+                }
+                out.push_str("  </foreign_keys>\n");
+            }
+
+            if !table.sample_rows.is_empty() {
+                out.push_str("  <sample_data>\n");
+                for row in &table.sample_rows {
+                    out.push_str(&format!("    <row>{}</row>\n", escape_xml(row)));
+                }
+                out.push_str("  </sample_data>\n");
+            }
+
+            out.push_str("</table>\n\n");
+        }
+        out.push_str("</database_schema>\n\n");
+    }
+
+    out.trim_end().to_string()
+}
+
+fn format_markdown(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
+    let mut out = String::new();
+
+    if let Some(p) = prompt {
+        out.push_str(p);
+        out.push_str("\n\n");
+    }
+
+    if let Some(fs) = fs {
+        out.push_str("## Directory Structure\n\n```\n");
+        out.push_str(&fs.tree);
+        out.push_str("\n```\n\n");
+
+        if !fs.files.is_empty() {
+            out.push_str("## File Contents\n\n");
+            for f in &fs.files {
+                out.push_str(&format!("### File: `{}`\n\n", f.path));
+                if let Some(err) = &f.error {
+                    out.push_str(&format!("*Error: {}*\n\n", err));
+                } else if let Some(skip) = &f.skipped {
+                    out.push_str(&format!("*Skipped: {}*\n\n", skip));
+                } else if let Some(content) = &f.content {
+                    out.push_str("```\n");
+                    out.push_str(content);
+                    if !content.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push_str("```\n\n");
+                }
+            }
+        }
+    }
+
+    if let Some(db) = db {
+        out.push_str("## Database Schema\n\n");
+        for table in db {
+            out.push_str(&format!("### Table: `{}`\n\n", table.name));
+            if let Some(comment) = &table.comment {
+                out.push_str(&format!("*{}*\n\n", comment));
+            }
+
+            out.push_str("| Column | Type | Nullable | Description |\n");
+            out.push_str("| --- | --- | --- | --- |\n");
+            for col in &table.columns {
+                let desc = col.comment.as_deref().unwrap_or("").replace('\n', " ");
+                out.push_str(&format!(
+                    "| `{}` | `{}` | `{}` | {} |\n",
+                    col.column_name, col.data_type, col.is_nullable, desc
+                ));
+            }
+            out.push('\n');
+
+            if !table.primary_keys.is_empty() {
+                out.push_str(&format!(
+                    "**Primary Keys**: `{}`\n\n",
+                    table.primary_keys.join(", ")
+                ));
+            }
+
+            if !table.foreign_keys.is_empty() {
+                out.push_str("**Foreign Keys**:\n\n");
+                for fk in &table.foreign_keys {
+                    out.push_str(&format!(
+                        "* `{}` -> `{}`.`{}`\n",
+                        fk.column_name, fk.foreign_table_name, fk.foreign_column_name
+                    ));
+                }
+                out.push('\n');
+            }
+
+            if !table.sample_rows.is_empty() {
+                out.push_str("**Sample Data**:\n\n```json\n");
+                for row in &table.sample_rows {
+                    out.push_str(row);
+                    out.push('\n');
+                }
+                out.push_str("```\n\n");
+            }
+        }
+    }
+
+    out.trim_end().to_string()
+}
+
+fn format_json(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
+    let output = JsonOutput {
+        prompt,
+        directory_structure: fs.map(|f| f.tree.as_str()),
+        files: fs.map(|f| f.files.as_slice()),
+        database_schema: db,
+    };
+    serde_json::to_string_pretty(&output)
+        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize to JSON: {}\"}}", e))
+}
+
+</file>
+
+<file path="src/fs.rs">
+use crate::cli::Cli;
+use anyhow::{Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::WalkBuilder;
+use pathdiff::diff_paths;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Deserialize, Debug, Default)]
+struct PresetsFile {
+    #[serde(default)]
+    global: PresetConfig,
+    #[serde(flatten)]
+    presets: HashMap<String, PresetConfig>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+struct PresetConfig {
+    include: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    include_in_tree: Option<Vec<String>>,
+}
+
+/// Represents the final configuration after merging presets and CLI args.
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    pub include_in_tree: Vec<String>,
+    pub tree_only_output: bool,
+    pub max_size: u64,
+    pub max_files: usize,
+    pub force: bool,
+}
+
+/// Represents a single file discovered during the scan.
+#[derive(Debug)]
+pub struct FileEntry {
+    pub path: PathBuf,
+    pub relative_path: String,
+    pub depth: usize,
+    pub is_dir: bool,
+    pub include_content: bool,
+    pub exceeds_size: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileData {
+    pub path: String,
+    pub content: Option<String>,
+    pub error: Option<String>,
+    pub skipped: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FsData {
+    pub tree: String,
+    pub files: Vec<FileData>,
+}
+
+fn load_presets_file() -> Result<PresetsFile> {
+    let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+    let context_dir = config_dir.join("context");
+    let config_path = context_dir.join("presets.toml");
+
+    if !config_path.exists() {
+        if fs::create_dir_all(&context_dir).is_ok() {
+            let default_toml = include_str!("../presets.example.toml");
+            if let Err(e) = fs::write(&config_path, default_toml) {
+                log::warn!("Failed to write default presets.toml: {}", e);
+                return Ok(PresetsFile::default());
+            } else {
+                log::info!("Created default presets file at {:?}", config_path);
+            }
+        } else {
+            return Ok(PresetsFile::default());
+        }
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .context(format!("Failed to read config at {:?}", config_path))?;
+
+    let parsed: PresetsFile = toml::from_str(&content).context("Failed to parse presets.toml")?;
+    Ok(parsed)
+}
+
+fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
+    let mut combined = Vec::new();
+    for list in lists.into_iter().flatten() {
+        combined.extend(list);
+    }
+    let mut seen = std::collections::HashSet::new();
+    combined.retain(|item| seen.insert(item.clone()));
+    combined
+}
+
+pub fn build_config(
+    preset_name: Option<&str>,
+    include: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    include_in_tree: Option<Vec<String>>,
+    tree_only: bool,
+    max_size: u64,
+    max_files: usize,
+    force: bool,
+) -> Result<RuntimeConfig> {
+    let presets_file = load_presets_file()?;
+
+    let global = presets_file.global;
+    let preset = preset_name
+        .and_then(|k| presets_file.presets.get(k))
+        .cloned()
+        .unwrap_or_default();
+
+    let mut final_include = combine_lists(vec![global.include, preset.include, include]);
+
+    if final_include.is_empty() {
+        final_include = vec!["**".into()];
+    }
+
+    let hardcoded_excludes = vec![
+        "**/.git/**".into(),
+        "**/*.db".into(),
+        "**/*.sqlite".into(),
+        "**/*.png".into(),
+        "**/*.jpg".into(),
+        "**/*.so".into(),
+        "**/*.zip".into(),
+        "**/*.tar.gz".into(),
+    ];
+
+    let final_exclude = combine_lists(vec![
+        Some(hardcoded_excludes),
+        global.exclude,
+        preset.exclude,
+        exclude,
+    ]);
+
+    let final_include_in_tree = combine_lists(vec![
+        global.include_in_tree,
+        preset.include_in_tree,
+        include_in_tree,
+    ]);
+
+    Ok(RuntimeConfig {
+        include: final_include,
+        exclude: final_exclude,
+        include_in_tree: final_include_in_tree,
+        tree_only_output: tree_only,
+        max_size,
+        max_files,
+        force,
+    })
+}
+
+pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<RuntimeConfig> {
+    let selected_preset = args.preset.as_deref().or(fallback_preset);
+
+    build_config(
+        selected_preset,
+        args.include.clone(),
+        args.exclude.clone(),
+        args.include_in_tree.clone(),
+        args.tree,
+        args.max_size,
+        args.max_files,
+        args.force,
+    )
+}
+
+fn is_binary_bytes(data: &[u8]) -> bool {
+    if data.contains(&0) {
+        return true;
+    }
+    let mut control_chars = 0;
+    for &byte in data {
+        if byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t' && byte != 0x0C {
+            control_chars += 1;
+        }
+    }
+    let ratio = control_chars as f32 / data.len() as f32;
+    ratio > 0.3
+}
+
+enum FileReadResult {
+    Text(String),
+    Binary,
+    NonUtf8,
+}
+
+fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+
+    let mut chunk = [0; 8192];
+    let n = file.read(&mut chunk)?;
+
+    if n == 0 {
+        return Ok(FileReadResult::Text(String::new()));
+    }
+
+    if is_binary_bytes(&chunk[..n]) {
+        return Ok(FileReadResult::Binary);
+    }
+
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(&chunk[..n]);
+    file.read_to_end(&mut buffer)?;
+
+    match String::from_utf8(buffer) {
+        Ok(s) => Ok(FileReadResult::Text(s)),
+        Err(_) => Ok(FileReadResult::NonUtf8),
+    }
+}
+
+pub struct Scanner {
+    root: PathBuf,
+    include_set: GlobSet,
+    exclude_set: GlobSet,
+    tree_only_set: GlobSet,
+    max_size: u64,
+    max_files: usize,
+}
+
+impl Scanner {
+    pub fn new(root: PathBuf, config: &RuntimeConfig) -> Result<Self> {
+        Ok(Self {
+            root,
+            include_set: build_globset(&config.include)?,
+            exclude_set: build_globset(&config.exclude)?,
+            tree_only_set: build_globset(&config.include_in_tree)?,
+            max_size: config.max_size,
+            max_files: config.max_files,
+        })
+    }
+
+    pub fn scan(&self) -> Vec<FileEntry> {
+        let mut entries = Vec::new();
+        let walker = WalkBuilder::new(&self.root)
+            .hidden(false)
+            .git_ignore(true)
+            .build();
+
+        for result in walker {
+            if entries.len() >= self.max_files {
+                log::warn!(
+                    "⚠️ Reached maximum file limit ({}). Stopping scan early.",
+                    self.max_files
+                );
+                break;
+            }
+
+            match result {
+                Ok(entry) => {
+                    if let Some(processed) = self.process_entry(entry.path()) {
+                        entries.push(processed);
+                    }
+                }
+                Err(err) => log::warn!("Error walking entry: {}", err),
+            }
+        }
+
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        entries
+    }
+
+    fn process_entry(&self, path: &Path) -> Option<FileEntry> {
+        if path == self.root {
+            return None;
+        }
+        if path.components().any(|c| c.as_os_str() == ".git") {
+            return None;
+        }
+
+        let relative = diff_paths(path, &self.root)?;
+        let relative_str = relative.to_string_lossy();
+
+        if self.exclude_set.is_match(&relative) {
+            return None;
+        }
+
+        let metadata = path.metadata().ok()?;
+        let is_dir = metadata.is_dir();
+        let size = metadata.len();
+
+        let matches_include = self.include_set.is_match(&relative);
+        let matches_tree = self.tree_only_set.is_match(&relative);
+
+        if !is_dir && !matches_include && !matches_tree {
+            return None;
+        }
+
+        let depth = relative.components().count();
+
+        Some(FileEntry {
+            path: path.to_path_buf(),
+            relative_path: relative_str.to_string(),
+            depth,
+            is_dir,
+            include_content: !is_dir && matches_include && !matches_tree,
+            exceeds_size: size > self.max_size,
+        })
+    }
+}
+
+fn build_globset(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pat in patterns {
+        builder.add(Glob::new(pat).context(format!("Invalid glob pattern: {}", pat))?);
+    }
+    Ok(builder.build()?)
+}
+
+fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
+    let mut tree_out = String::new();
+    for entry in entries {
+        let indent = "    ".repeat(entry.depth.saturating_sub(1));
+        let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+        let marker = if entry.is_dir { "/" } else { "" };
+        tree_out.push_str(&format!("{}{}{}\n", indent, name, marker));
+    }
+
+    let mut files = Vec::new();
+    if !config.tree_only_output {
+        for entry in entries {
+            if entry.include_content {
+                if entry.exceeds_size {
+                    files.push(FileData {
+                        path: entry.relative_path.clone(),
+                        content: None,
+                        error: Some("File exceeds maximum size limit.".into()),
+                        skipped: None,
+                    });
+                    continue;
+                }
+
+                match read_text_file(&entry.path) {
+                    Ok(FileReadResult::Text(content)) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: Some(content),
+                            error: None,
+                            skipped: None,
+                        });
+                    }
+                    Ok(FileReadResult::Binary) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: None,
+                            skipped: Some("Binary file detected.".into()),
+                        });
+                    }
+                    Ok(FileReadResult::NonUtf8) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: None,
+                            skipped: Some("Non-UTF-8 text / binary file detected.".into()),
+                        });
+                    }
+                    Err(e) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: Some(format!("Error reading file: {}", e)),
+                            skipped: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    FsData {
+        tree: tree_out.trim_end().to_string(),
+        files,
+    }
+}
+
+pub fn gather(args: &Cli) -> Result<Option<FsData>> {
+    let target_dir = if let Some(config_name) = &args.config {
+        dirs::config_dir()
+            .context("Could not determine config directory")?
+            .join(config_name)
+    } else {
+        let current_dir = env::current_dir().context("Failed to get current directory")?;
+        current_dir.join(&args.path)
+    };
+
+    let target_dir = target_dir.canonicalize().unwrap_or(target_dir);
+
+    if !target_dir.exists() {
+        anyhow::bail!("Target directory does not exist: {:?}", target_dir);
+    }
+
+    let project_name = target_dir.file_name().and_then(|n| n.to_str());
+    let config = resolve_config(args, project_name)?;
+
+    if !config.force {
+        if let Some(home) = dirs::home_dir() {
+            if target_dir == home.canonicalize().unwrap_or_else(|_| home.clone()) {
+                anyhow::bail!("Cowardly refusing to scan the entire home directory. Use --force to override, or specify a narrower path/include pattern.");
+            }
+        }
+        if target_dir == PathBuf::from("/") {
+            anyhow::bail!(
+                "Cowardly refusing to scan the entire root directory. Use --force to override."
+            );
+        }
+    }
+
+    let scanner = Scanner::new(target_dir.clone(), &config)?;
+    let entries = scanner.scan();
+
+    if entries.is_empty() {
+        return Ok(None);
+    }
+
+    let data = gather_data(&entries, &config);
+    Ok(Some(data))
+}
+
+</file>
+
+<file path="src/lib.rs">
+pub mod cli;
+pub mod db;
+pub mod format;
+pub mod fs;
+
+</file>
+
+<file path="src/main.rs">
+use anyhow::Result;
+use clap::Parser;
+use context::cli::Cli;
+use context::{db, format, fs};
+use env_logger::Env;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Load environment variables first so log filters (e.g., RUST_LOG) are applied correctly.
+    dotenvy::dotenv().ok();
+
+    // Initialize logging (default to info if not set)
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
+    // Parse the unified global CLI options
+    let cli = Cli::parse();
+
+    // Determine what functionality to run
+    let run_db = cli.sql || cli.db_url.is_some();
+    let has_code_args =
+        cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
+
+    // Run file scanner if:
+    // 1. Explicitly requested via code arguments (has_code_args)
+    // 2. The user passed --sql (which defaults to pulling both file and sql context)
+    // 3. No database flags were provided at all (!run_db)
+    // This implies using --db-url exclusively will only pull SQL context.
+    let run_fs = has_code_args || cli.sql || !run_db;
+
+    let mut fs_data = None;
+    let mut db_data = None;
+    let mut context_found = false;
+
+    // 1. Gather File/Code Context
+    if run_fs {
+        match fs::gather(&cli) {
+            Ok(Some(data)) => {
+                fs_data = Some(data);
+                context_found = true;
+            }
+            Ok(None) => log::info!("No file content found matching criteria."),
+            Err(e) => log::error!("❌ Code scanner error: {:#}", e),
+        }
+    }
+
+    // 2. Gather SQL Context
+    if run_db {
+        match db::gather(&cli).await {
+            Ok(Some(data)) => {
+                db_data = Some(data);
+                context_found = true;
+            }
+            Ok(None) => log::info!("No database schema found."),
+            Err(e) => log::error!("❌ SQL scanner error: {:#}", e),
+        }
+    }
+
+    // Checking if we got nothing out of both processes AND there's no custom prompt
+    if !context_found && cli.prompt.is_none() {
+        log::warn!("⚠️ No context generated. Try tweaking your arguments.");
+    }
+
+    // Build the final output applying the selected format abstraction
+    let output = format::format_output(
+        &cli.format,
+        cli.prompt.as_deref(),
+        fs_data.as_ref(),
+        db_data.as_deref(),
+    );
+    let trimmed_output = output.trim();
+
+    if !trimmed_output.is_empty() {
+        // Print the actual generated context to STDOUT
+        println!("{}", trimmed_output);
+
+        // Skip printing stats if the user requested the tree view exclusively
+        if !cli.tree {
+            // Calculate statistics
+            let lines = trimmed_output.lines().count();
+            // A common rough estimate for LLMs: 1 token ≈ 4 chars
+            let approx_tokens = trimmed_output.len() / 4;
+
+            // Print stats to STDERR so it doesn't get piped to wl-copy or output files
+            eprintln!(
+                "\n✅ Context generated: {} lines, ~{} tokens",
+                lines, approx_tokens
+            );
+        }
+    }
+
+    Ok(())
+}
+
+</file>
+
+</file_contents>

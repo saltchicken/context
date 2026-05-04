@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pathdiff::diff_paths;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -47,17 +47,28 @@ pub struct FileEntry {
     pub exceeds_size: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FileData {
+    pub path: String,
+    pub content: Option<String>,
+    pub error: Option<String>,
+    pub skipped: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FsData {
+    pub tree: String,
+    pub files: Vec<FileData>,
+}
+
 fn load_presets_file() -> Result<PresetsFile> {
     let config_dir = dirs::config_dir().context("Could not determine config directory")?;
     let context_dir = config_dir.join("context");
     let config_path = context_dir.join("presets.toml");
 
     if !config_path.exists() {
-        // Try to create the default config directory and file
         if fs::create_dir_all(&context_dir).is_ok() {
-            // Embed the presets.example.toml at compile time
             let default_toml = include_str!("../presets.example.toml");
-
             if let Err(e) = fs::write(&config_path, default_toml) {
                 log::warn!("Failed to write default presets.toml: {}", e);
                 return Ok(PresetsFile::default());
@@ -81,7 +92,6 @@ fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
     for list in lists.into_iter().flatten() {
         combined.extend(list);
     }
-    // Deduplicate while keeping order
     let mut seen = std::collections::HashSet::new();
     combined.retain(|item| seen.insert(item.clone()));
     combined
@@ -107,12 +117,10 @@ pub fn build_config(
 
     let mut final_include = combine_lists(vec![global.include, preset.include, include]);
 
-    // Provide an intelligent "universal" default if no includes were specified
     if final_include.is_empty() {
         final_include = vec!["**".into()];
     }
 
-    // Always exclude certain problematic binaries universally
     let hardcoded_excludes = vec![
         "**/.git/**".into(),
         "**/*.db".into(),
@@ -163,23 +171,16 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
     )
 }
 
-/// Helper to detect binary data based on a slice of bytes.
 fn is_binary_bytes(data: &[u8]) -> bool {
-    // 1. Fast check for NUL bytes (standard Git heuristic)
     if data.contains(&0) {
         return true;
     }
-
-    // 2. Check ratio of control characters
-    // If more than 30% of the buffer is non-printable/control characters
-    // (excluding standard whitespace like \r, \n, \t, \x0C), we consider it binary.
     let mut control_chars = 0;
     for &byte in data {
         if byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t' && byte != 0x0C {
             control_chars += 1;
         }
     }
-
     let ratio = control_chars as f32 / data.len() as f32;
     ratio > 0.3
 }
@@ -190,112 +191,28 @@ enum FileReadResult {
     NonUtf8,
 }
 
-/// Reads a file while simultaneously performing a fast binary check to prevent double file I/O.
 fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
     use std::io::Read;
     let mut file = fs::File::open(path)?;
 
-    // Read the first 8KB into our chunk buffer to test for binary
     let mut chunk = [0; 8192];
     let n = file.read(&mut chunk)?;
 
     if n == 0 {
-        return Ok(FileReadResult::Text(String::new())); // Empty file is safely not binary
+        return Ok(FileReadResult::Text(String::new()));
     }
 
     if is_binary_bytes(&chunk[..n]) {
-        return Ok(FileReadResult::Binary); // Abort early; no need to keep reading
+        return Ok(FileReadResult::Binary);
     }
 
-    // Seed our final buffer with the first verified chunk
     let mut buffer = Vec::new();
     buffer.extend_from_slice(&chunk[..n]);
-
-    // Read the rest of the file using the already open file descriptor
     file.read_to_end(&mut buffer)?;
 
-    // Attempt to convert the full buffer into a valid UTF-8 String
     match String::from_utf8(buffer) {
         Ok(s) => Ok(FileReadResult::Text(s)),
         Err(_) => Ok(FileReadResult::NonUtf8),
-    }
-}
-
-pub struct OutputGenerator;
-
-impl OutputGenerator {
-    pub fn generate_tree(entries: &[FileEntry]) -> String {
-        let mut output = String::new();
-
-        for entry in entries {
-            let indent = "    ".repeat(entry.depth.saturating_sub(1));
-            let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
-
-            let marker = if entry.is_dir { "/" } else { "" };
-            output.push_str(&format!("{}{}{}\n", indent, name, marker));
-        }
-
-        output.trim_end().to_string()
-    }
-
-    pub fn generate_content(entries: &[FileEntry]) -> String {
-        let mut blocks = Vec::new();
-
-        for entry in entries {
-            if entry.include_content {
-                if entry.exceeds_size {
-                    blocks.push(format!(
-                        "<file path=\"{}\" error=\"true\">\nError: File exceeds maximum size limit.\n</file>",
-                        entry.relative_path
-                    ));
-                    continue;
-                }
-
-                // Single I/O check handling binary heuristics and text parsing safely
-                match read_text_file(&entry.path) {
-                    Ok(FileReadResult::Text(content)) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\">\n{}\n</file>",
-                            entry.relative_path, content
-                        ));
-                    }
-                    Ok(FileReadResult::Binary) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Binary file detected.\n</file>",
-                            entry.relative_path
-                        ));
-                    }
-                    Ok(FileReadResult::NonUtf8) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" skipped=\"true\">\nSkipped: Non-UTF-8 text / binary file detected.\n</file>",
-                            entry.relative_path
-                        ));
-                    }
-                    Err(e) => {
-                        blocks.push(format!(
-                            "<file path=\"{}\" error=\"true\">\nError reading file: {}\n</file>",
-                            entry.relative_path, e
-                        ));
-                    }
-                }
-            }
-        }
-
-        blocks.join("\n\n")
-    }
-
-    pub fn format_full_output(tree: &str, content: &str) -> String {
-        let mut out = String::from("<directory_structure>\n");
-        out.push_str(tree);
-        out.push_str("\n</directory_structure>");
-
-        if !content.is_empty() {
-            out.push_str("\n\n<file_contents>\n");
-            out.push_str(content);
-            out.push_str("\n</file_contents>");
-        }
-
-        out
     }
 }
 
@@ -322,7 +239,6 @@ impl Scanner {
 
     pub fn scan(&self) -> Vec<FileEntry> {
         let mut entries = Vec::new();
-
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
             .git_ignore(true)
@@ -330,7 +246,10 @@ impl Scanner {
 
         for result in walker {
             if entries.len() >= self.max_files {
-                log::warn!("⚠️ Reached maximum file limit ({}). Stopping scan early to prevent memory exhaustion.", self.max_files);
+                log::warn!(
+                    "⚠️ Reached maximum file limit ({}). Stopping scan early.",
+                    self.max_files
+                );
                 break;
             }
 
@@ -352,7 +271,6 @@ impl Scanner {
         if path == self.root {
             return None;
         }
-
         if path.components().any(|c| c.as_os_str() == ".git") {
             return None;
         }
@@ -396,30 +314,74 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-pub fn generate(config: RuntimeConfig, root: PathBuf) -> Result<String> {
-    let scanner = Scanner::new(root, &config)?;
-    let entries = scanner.scan();
-
-    if entries.is_empty() {
-        return Ok(String::new());
+fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
+    let mut tree_out = String::new();
+    for entry in entries {
+        let indent = "    ".repeat(entry.depth.saturating_sub(1));
+        let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+        let marker = if entry.is_dir { "/" } else { "" };
+        tree_out.push_str(&format!("{}{}{}\n", indent, name, marker));
     }
 
-    let tree_str = OutputGenerator::generate_tree(&entries);
+    let mut files = Vec::new();
+    if !config.tree_only_output {
+        for entry in entries {
+            if entry.include_content {
+                if entry.exceeds_size {
+                    files.push(FileData {
+                        path: entry.relative_path.clone(),
+                        content: None,
+                        error: Some("File exceeds maximum size limit.".into()),
+                        skipped: None,
+                    });
+                    continue;
+                }
 
-    let final_output = if config.tree_only_output {
-        format!(
-            "<directory_structure>\n{}\n</directory_structure>",
-            tree_str
-        )
-    } else {
-        let content_str = OutputGenerator::generate_content(&entries);
-        OutputGenerator::format_full_output(&tree_str, &content_str)
-    };
+                match read_text_file(&entry.path) {
+                    Ok(FileReadResult::Text(content)) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: Some(content),
+                            error: None,
+                            skipped: None,
+                        });
+                    }
+                    Ok(FileReadResult::Binary) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: None,
+                            skipped: Some("Binary file detected.".into()),
+                        });
+                    }
+                    Ok(FileReadResult::NonUtf8) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: None,
+                            skipped: Some("Non-UTF-8 text / binary file detected.".into()),
+                        });
+                    }
+                    Err(e) => {
+                        files.push(FileData {
+                            path: entry.relative_path.clone(),
+                            content: None,
+                            error: Some(format!("Error reading file: {}", e)),
+                            skipped: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
 
-    Ok(final_output)
+    FsData {
+        tree: tree_out.trim_end().to_string(),
+        files,
+    }
 }
 
-pub fn run(args: &Cli) -> Result<Option<String>> {
+pub fn gather(args: &Cli) -> Result<Option<FsData>> {
     let target_dir = if let Some(config_name) = &args.config {
         dirs::config_dir()
             .context("Could not determine config directory")?
@@ -438,7 +400,6 @@ pub fn run(args: &Cli) -> Result<Option<String>> {
     let project_name = target_dir.file_name().and_then(|n| n.to_str());
     let config = resolve_config(args, project_name)?;
 
-    // SAFEGUARD: Prevent scanning home or root directories without --force
     if !config.force {
         if let Some(home) = dirs::home_dir() {
             if target_dir == home.canonicalize().unwrap_or_else(|_| home.clone()) {
@@ -452,11 +413,13 @@ pub fn run(args: &Cli) -> Result<Option<String>> {
         }
     }
 
-    let output = generate(config, target_dir)?;
+    let scanner = Scanner::new(target_dir.clone(), &config)?;
+    let entries = scanner.scan();
 
-    if output.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(output))
+    if entries.is_empty() {
+        return Ok(None);
     }
+
+    let data = gather_data(&entries, &config);
+    Ok(Some(data))
 }

@@ -1,9 +1,9 @@
 use crate::cli::Cli;
 use anyhow::{Context, Result};
+use serde::Serialize;
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{FromRow, Row};
 use std::env;
-use std::fmt::Write;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -31,7 +31,7 @@ pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
     })
 }
 
-#[derive(FromRow, Debug, Clone)]
+#[derive(FromRow, Debug, Clone, Serialize)]
 pub struct ColumnInfo {
     pub column_name: String,
     pub data_type: String,
@@ -40,14 +40,14 @@ pub struct ColumnInfo {
     pub comment: Option<String>,
 }
 
-#[derive(FromRow, Debug, Clone)]
+#[derive(FromRow, Debug, Clone, Serialize)]
 pub struct ForeignKeyInfo {
     pub column_name: String,
     pub foreign_table_name: String,
     pub foreign_column_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TableData {
     pub name: String,
     pub comment: Option<String>,
@@ -214,90 +214,8 @@ impl<'a> Inspector<'a> {
     }
 }
 
-/// Escapes characters that are illegal in XML attributes and text nodes
-fn escape_xml(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-pub struct OutputGenerator;
-
-impl OutputGenerator {
-    pub fn generate_xml(tables: &[TableData]) -> Result<String, std::fmt::Error> {
-        let mut output = String::new();
-
-        for table in tables {
-            writeln!(output, "<table name=\"{}\">", escape_xml(&table.name))?;
-
-            if let Some(comment) = &table.comment {
-                writeln!(
-                    output,
-                    "  <description>{}</description>",
-                    escape_xml(comment.trim())
-                )?;
-            }
-
-            writeln!(output, "  <columns>")?;
-            for col in &table.columns {
-                let mut col_tag = format!(
-                    "    <column name=\"{}\" type=\"{}\" nullable=\"{}\"",
-                    escape_xml(&col.column_name),
-                    escape_xml(&col.data_type),
-                    escape_xml(&col.is_nullable)
-                );
-
-                // Keep the column comment strictly inside an attribute for cleaner structure
-                if let Some(comment) = &col.comment {
-                    col_tag.push_str(&format!(" description=\"{}\"", escape_xml(comment.trim())));
-                }
-
-                col_tag.push_str(" />");
-                writeln!(output, "{}", col_tag)?;
-            }
-            writeln!(output, "  </columns>")?;
-
-            if !table.primary_keys.is_empty() {
-                writeln!(
-                    output,
-                    "  <primary_key>{}</primary_key>",
-                    escape_xml(&table.primary_keys.join(", "))
-                )?;
-            }
-
-            if !table.foreign_keys.is_empty() {
-                writeln!(output, "  <foreign_keys>")?;
-                for fk in &table.foreign_keys {
-                    writeln!(
-                        output,
-                        "    <foreign_key column=\"{}\" foreign_table=\"{}\" foreign_column=\"{}\" />",
-                        escape_xml(&fk.column_name),
-                        escape_xml(&fk.foreign_table_name),
-                        escape_xml(&fk.foreign_column_name)
-                    )?;
-                }
-                writeln!(output, "  </foreign_keys>")?;
-            }
-
-            if !table.sample_rows.is_empty() {
-                writeln!(output, "  <sample_data>")?;
-                for row in &table.sample_rows {
-                    writeln!(output, "    <row>{}</row>", escape_xml(row))?;
-                }
-                writeln!(output, "  </sample_data>")?;
-            }
-
-            writeln!(output, "</table>\n")?;
-        }
-
-        Ok(output)
-    }
-}
-
-pub async fn generate_report(config: &AppConfig) -> Result<String> {
+pub async fn gather(args: &Cli) -> Result<Option<Vec<TableData>>> {
+    let config = resolve_config(args)?;
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.db_url)
@@ -307,21 +225,9 @@ pub async fn generate_report(config: &AppConfig) -> Result<String> {
     let inspector = Inspector::new(&pool, config.collect_samples, config.ignore_tables.clone());
     let table_data = inspector.scan().await?;
 
-    let output = OutputGenerator::generate_xml(&table_data)
-        .map_err(|e| anyhow::anyhow!("Formatting error: {}", e))?;
-
-    Ok(output)
-}
-
-pub async fn run(args: &Cli) -> Result<Option<String>> {
-    let config = resolve_config(args)?;
-    let output = generate_report(&config).await?;
-    if output.is_empty() {
+    if table_data.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(format!(
-            "<database_schema>\n{}\n</database_schema>",
-            output.trim_end()
-        )))
+        Ok(Some(table_data))
     }
 }
