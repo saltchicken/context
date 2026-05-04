@@ -1,9 +1,27 @@
-# Default presets for context CLI
-
 [global]
 # Global patterns applied to every run
 include = ["README.md"]
-exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
+exclude = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/*.db",
+    "**/*.sqlite",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.so",
+    "**/*.zip",
+    "**/*.tar.gz",
+    "**/*.gz",
+    "**/*.tar",
+    "**/*.tgz",
+    "**/*.tar.xz",
+    "**/*.xz",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.min.js.map",
+    "**/*.min.css.map"
+]
 
 [rust]
 include = ["**/*.rs", "Cargo.toml"]
