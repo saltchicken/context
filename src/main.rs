@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use context::cli::Cli;
-use context::{db, format, fs};
+use context::{config, db, format, fs};
 use env_logger::Env;
 
 #[tokio::main]
@@ -10,11 +10,27 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     // Parse the unified global CLI options first so we can check for flags like --quiet
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // Initialize logging (default to warn if quiet is enabled, otherwise info)
     let default_log_level = if cli.quiet { "warn" } else { "info" };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level)).init();
+
+    // Load config from config.toml
+    let user_config = match config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to load config.toml: {}", e);
+            config::UserConfig::default()
+        }
+    };
+
+    // Apply config defaults to CLI options
+    cli.git_root = (cli.git_root || user_config.git_root.unwrap_or(false)) && !cli.no_git_root;
+    let resolved_format = cli
+        .format
+        .clone()
+        .unwrap_or(user_config.format.unwrap_or(format::OutputFormat::Xml));
 
     // Determine what functionality to run
     let run_db = cli.sql || cli.db_url.is_some();
@@ -63,7 +79,7 @@ async fn main() -> Result<()> {
 
     // Build the final output applying the selected format abstraction
     let output = format::format_output(
-        &cli.format,
+        &resolved_format,
         cli.prompt.as_deref(),
         fs_data.as_ref(),
         db_data.as_deref(),

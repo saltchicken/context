@@ -1,9 +1,9 @@
 use crate::db::TableData;
 use crate::fs::{FileData, FsData};
 use clap::ValueEnum;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(ValueEnum, Clone, Default, Debug, Serialize)]
+#[derive(ValueEnum, Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]

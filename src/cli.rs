@@ -14,9 +14,9 @@ pub struct Cli {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Choose the output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Xml, help_heading = "Output Options")]
-    pub format: OutputFormat,
+    /// Choose the output format (overrides config.toml)
+    #[arg(long, value_enum, help_heading = "Output Options")]
+    pub format: Option<OutputFormat>,
 
     /// Suppress stderr output (e.g., stats and info logs)
     #[arg(short, long, help_heading = "Output Options")]
@@ -37,6 +37,10 @@ pub struct Cli {
     /// Intelligently find and use the root of the git project as the scan path
     #[arg(long, help_heading = "File Scanning")]
     pub git_root: bool,
+
+    /// Disable using the root of the git project (overrides config.toml and --git-root)
+    #[arg(long, overrides_with = "git_root", help_heading = "File Scanning")]
+    pub no_git_root: bool,
 
     /// Show only the directory tree structure (code context)
     #[arg(long, help_heading = "File Scanning")]
