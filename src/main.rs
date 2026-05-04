@@ -6,11 +6,29 @@ use env_logger::Env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load environment variables first so log filters (e.g., RUST_LOG) are applied correctly.
-    dotenvy::dotenv().ok();
-
     // Parse the unified global CLI options first so we can check for flags like --quiet
     let mut cli = Cli::parse();
+
+    // Evaluate the target path early to load project-specific .env files
+    let initial_target = if let Some(config_name) = &cli.config {
+        dirs::config_dir().unwrap_or_default().join(config_name)
+    } else {
+        std::env::current_dir().unwrap_or_default().join(&cli.path)
+    };
+
+    let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
+
+    if cli.git_root {
+        if let Some(git_root) = fs::find_git_root(&target_dir) {
+            target_dir = git_root;
+        }
+    }
+
+    // Try to load .env from the target directory
+    dotenvy::from_path(target_dir.join(".env")).ok();
+
+    // Fallback to standard CWD dotenv
+    dotenvy::dotenv().ok();
 
     // Initialize logging (default to warn if quiet is enabled, otherwise info)
     let default_log_level = if cli.quiet { "warn" } else { "info" };

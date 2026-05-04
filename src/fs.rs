@@ -382,7 +382,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
 }
 
 /// Helper function to traverse upwards and find the git root
-fn find_git_root(start_path: &Path) -> Option<PathBuf> {
+pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     for ancestor in start_path.ancestors() {
         if ancestor.join(".git").exists() {
             return Some(ancestor.to_path_buf());
