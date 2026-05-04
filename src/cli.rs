@@ -81,4 +81,8 @@ pub struct Cli {
     /// Collect sample rows from tables (SQL mode only)
     #[arg(long, help_heading = "Database Options")]
     pub samples: bool,
+
+    /// Max length for string values in database sample rows (0 to disable)
+    #[arg(long, default_value = "256", help_heading = "Database Options")]
+    pub max_sample_len: usize,
 }

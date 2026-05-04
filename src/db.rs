@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub db_name: String,
     pub collect_samples: bool,
     pub ignore_tables: Vec<String>,
+    pub max_sample_len: usize,
 }
 
 pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
@@ -28,6 +29,7 @@ pub fn resolve_config(cli: &Cli) -> Result<AppConfig> {
         db_name,
         collect_samples: cli.samples,
         ignore_tables,
+        max_sample_len: cli.max_sample_len,
     })
 }
 
@@ -61,14 +63,21 @@ pub struct Inspector<'a> {
     pool: &'a sqlx::PgPool,
     collect_samples: bool,
     ignore_tables: Vec<String>,
+    max_sample_len: usize,
 }
 
 impl<'a> Inspector<'a> {
-    pub fn new(pool: &'a sqlx::PgPool, collect_samples: bool, ignore_tables: Vec<String>) -> Self {
+    pub fn new(
+        pool: &'a sqlx::PgPool,
+        collect_samples: bool,
+        ignore_tables: Vec<String>,
+        max_sample_len: usize,
+    ) -> Self {
         Self {
             pool,
             collect_samples,
             ignore_tables,
+            max_sample_len,
         }
     }
 
@@ -205,12 +214,53 @@ impl<'a> Inspector<'a> {
         );
 
         let rows = sqlx::query(&data_query)
-            .map(|row: PgRow| row.get::<String, _>(0))
+            .map(|row: PgRow| {
+                let mut json_str = row.get::<String, _>(0);
+
+                // Parse JSON and selectively truncate strings to maintain JSON validity
+                if self.max_sample_len > 0 {
+                    if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        truncate_json_strings(&mut json_val, self.max_sample_len);
+                        if let Ok(new_str) = serde_json::to_string(&json_val) {
+                            json_str = new_str;
+                        }
+                    }
+                }
+
+                json_str
+            })
             .fetch_all(self.pool)
             .await
             .unwrap_or_default();
 
         Ok(rows)
+    }
+}
+
+/// Recursively traverses a JSON value and truncates string values that exceed `max_len`.
+fn truncate_json_strings(val: &mut serde_json::Value, max_len: usize) {
+    if max_len == 0 {
+        return;
+    }
+    match val {
+        serde_json::Value::String(s) => {
+            if s.chars().count() > max_len {
+                let mut truncated: String = s.chars().take(max_len).collect();
+                truncated.push_str("...");
+                *s = truncated;
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                truncate_json_strings(item, max_len);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for v in obj.values_mut() {
+                truncate_json_strings(v, max_len);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -222,7 +272,13 @@ pub async fn gather(args: &Cli) -> Result<Option<Vec<TableData>>> {
         .await
         .context("Failed to connect to database")?;
 
-    let inspector = Inspector::new(&pool, config.collect_samples, config.ignore_tables.clone());
+    let inspector = Inspector::new(
+        &pool,
+        config.collect_samples,
+        config.ignore_tables.clone(),
+        config.max_sample_len,
+    );
+
     let table_data = inspector.scan().await?;
 
     if table_data.is_empty() {
