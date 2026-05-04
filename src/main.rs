@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
     // Build the final output applying the selected format abstraction
     let output = format::format_output(
         &resolved_format,
+        user_config.instructions.as_deref(),
         final_prompt.as_deref(),
         fs_data.as_ref(),
         db_data.as_deref(),

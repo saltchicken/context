@@ -3,3 +3,6 @@ format = "xml"
 
 # Automatically find and use the root of the git project
 git_root = false
+
+# Global instruction set to inject into every context output
+instructions = "You are a senior developer. Please review the following code for optimizations and security vulnerabilities."

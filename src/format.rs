@@ -17,6 +17,8 @@ pub enum OutputFormat {
 #[derive(Serialize)]
 struct JsonOutput<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     directory_structure: Option<&'a str>,
@@ -28,14 +30,15 @@ struct JsonOutput<'a> {
 
 pub fn format_output(
     format: &OutputFormat,
+    instructions: Option<&str>,
     prompt: Option<&str>,
     fs: Option<&FsData>,
     db: Option<&[TableData]>,
 ) -> String {
     match format {
-        OutputFormat::Xml => format_xml(prompt, fs, db),
-        OutputFormat::Markdown => format_markdown(prompt, fs, db),
-        OutputFormat::Json => format_json(prompt, fs, db),
+        OutputFormat::Xml => format_xml(instructions, prompt, fs, db),
+        OutputFormat::Markdown => format_markdown(instructions, prompt, fs, db),
+        OutputFormat::Json => format_json(instructions, prompt, fs, db),
     }
 }
 
@@ -74,8 +77,16 @@ fn escape_xml(input: &str) -> Cow<'_, str> {
 }
 
 /// Helper to estimate the required buffer capacity to avoid constant re-allocations
-fn estimate_capacity(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> usize {
+fn estimate_capacity(
+    instructions: Option<&str>,
+    prompt: Option<&str>,
+    fs: Option<&FsData>,
+    db: Option<&[TableData]>,
+) -> usize {
     let mut cap = 0;
+    if let Some(i) = instructions {
+        cap += i.len() + 32; // Added capacity for wrapper tags or headers
+    }
     if let Some(p) = prompt {
         cap += p.len() + 32; // Added capacity for wrapper tags or headers
     }
@@ -95,9 +106,20 @@ fn estimate_capacity(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[Tab
     cap
 }
 
-fn format_xml(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
-    let capacity = estimate_capacity(prompt, fs, db);
+fn format_xml(
+    instructions: Option<&str>,
+    prompt: Option<&str>,
+    fs: Option<&FsData>,
+    db: Option<&[TableData]>,
+) -> String {
+    let capacity = estimate_capacity(instructions, prompt, fs, db);
     let mut out = String::with_capacity(capacity);
+
+    if let Some(i) = instructions {
+        out.push_str("<instructions>\n");
+        out.push_str(i);
+        out.push_str("\n</instructions>\n\n");
+    }
 
     if let Some(p) = prompt {
         out.push_str("<prompt>\n");
@@ -207,9 +229,20 @@ fn format_xml(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]
     out.trim_end().to_string()
 }
 
-fn format_markdown(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
-    let capacity = estimate_capacity(prompt, fs, db);
+fn format_markdown(
+    instructions: Option<&str>,
+    prompt: Option<&str>,
+    fs: Option<&FsData>,
+    db: Option<&[TableData]>,
+) -> String {
+    let capacity = estimate_capacity(instructions, prompt, fs, db);
     let mut out = String::with_capacity(capacity);
+
+    if let Some(i) = instructions {
+        out.push_str("## Instructions\n\n");
+        out.push_str(i);
+        out.push_str("\n\n");
+    }
 
     if let Some(p) = prompt {
         out.push_str("## Prompt\n\n");
@@ -298,8 +331,14 @@ fn format_markdown(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[Table
     out.trim_end().to_string()
 }
 
-fn format_json(prompt: Option<&str>, fs: Option<&FsData>, db: Option<&[TableData]>) -> String {
+fn format_json(
+    instructions: Option<&str>,
+    prompt: Option<&str>,
+    fs: Option<&FsData>,
+    db: Option<&[TableData]>,
+) -> String {
     let output = JsonOutput {
+        instructions,
         prompt,
         directory_structure: fs.map(|f| f.tree.as_str()),
         files: fs.map(|f| f.files.as_slice()),

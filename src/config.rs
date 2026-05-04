@@ -7,6 +7,7 @@ use std::fs;
 pub struct UserConfig {
     pub format: Option<OutputFormat>,
     pub git_root: Option<bool>,
+    pub instructions: Option<String>,
 }
 
 pub fn load_config() -> Result<UserConfig> {
