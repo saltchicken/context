@@ -16,7 +16,7 @@ pub fn load_config() -> Result<UserConfig> {
 
     if !config_path.exists() {
         if fs::create_dir_all(&context_dir).is_ok() {
-            let default_toml = include_str!("../config.example.toml");
+            let default_toml = include_str!("../assets/config.example.toml");
             if let Err(e) = fs::write(&config_path, default_toml) {
                 log::warn!("Failed to write default config.toml: {}", e);
             } else {

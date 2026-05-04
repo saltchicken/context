@@ -68,7 +68,7 @@ fn load_presets_file() -> Result<PresetsFile> {
 
     if !config_path.exists() {
         if fs::create_dir_all(&context_dir).is_ok() {
-            let default_toml = include_str!("../presets.example.toml");
+            let default_toml = include_str!("../assets/presets.example.toml");
             if let Err(e) = fs::write(&config_path, default_toml) {
                 log::warn!("Failed to write default presets.toml: {}", e);
                 return Ok(PresetsFile::default());
