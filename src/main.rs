@@ -9,11 +9,12 @@ async fn main() -> Result<()> {
     // Load environment variables first so log filters (e.g., RUST_LOG) are applied correctly.
     dotenvy::dotenv().ok();
 
-    // Initialize logging (default to info if not set)
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-
-    // Parse the unified global CLI options
+    // Parse the unified global CLI options first so we can check for flags like --quiet
     let cli = Cli::parse();
+
+    // Initialize logging (default to warn if quiet is enabled, otherwise info)
+    let default_log_level = if cli.quiet { "warn" } else { "info" };
+    env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level)).init();
 
     // Determine what functionality to run
     let run_db = cli.sql || cli.db_url.is_some();
@@ -73,8 +74,8 @@ async fn main() -> Result<()> {
         // Print the actual generated context to STDOUT
         println!("{}", trimmed_output);
 
-        // Skip printing stats if the user requested the tree view exclusively
-        if !cli.tree {
+        // Skip printing stats if the user requested the tree view exclusively or enabled quiet mode
+        if !cli.tree && !cli.quiet {
             // Calculate statistics
             let lines = trimmed_output.lines().count();
             // A common rough estimate for LLMs: 1 token ≈ 4 chars

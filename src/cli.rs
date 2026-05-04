@@ -18,6 +18,10 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Xml, help_heading = "Output Options")]
     pub format: OutputFormat,
 
+    /// Suppress stderr output (e.g., stats and info logs)
+    #[arg(short, long, help_heading = "Output Options")]
+    pub quiet: bool,
+
     /// Prepend a prompt to the generated context
     #[arg(short, long)]
     pub prompt: Option<String>,
