@@ -381,8 +381,18 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
     }
 }
 
+/// Helper function to traverse upwards and find the git root
+fn find_git_root(start_path: &Path) -> Option<PathBuf> {
+    for ancestor in start_path.ancestors() {
+        if ancestor.join(".git").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
 pub fn gather(args: &Cli) -> Result<Option<FsData>> {
-    let target_dir = if let Some(config_name) = &args.config {
+    let initial_target = if let Some(config_name) = &args.config {
         dirs::config_dir()
             .context("Could not determine config directory")?
             .join(config_name)
@@ -391,7 +401,18 @@ pub fn gather(args: &Cli) -> Result<Option<FsData>> {
         current_dir.join(&args.path)
     };
 
-    let target_dir = target_dir.canonicalize().unwrap_or(target_dir);
+    let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
+
+    if args.git_root {
+        if let Some(git_root) = find_git_root(&target_dir) {
+            target_dir = git_root;
+        } else {
+            log::warn!(
+                "⚠️ --git-root specified, but no .git directory found. Falling back to {:?}",
+                target_dir
+            );
+        }
+    }
 
     if !target_dir.exists() {
         anyhow::bail!("Target directory does not exist: {:?}", target_dir);

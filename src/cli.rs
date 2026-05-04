@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(long, help_heading = "File Scanning")]
     pub preset: Option<String>,
 
+    /// Intelligently find and use the root of the git project as the scan path
+    #[arg(long, help_heading = "File Scanning")]
+    pub git_root: bool,
+
     /// Show only the directory tree structure (code context)
     #[arg(long, help_heading = "File Scanning")]
     pub tree: bool,
