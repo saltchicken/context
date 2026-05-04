@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use context::cli::Cli;
 use context::{config, db, format, fs};
@@ -12,6 +12,20 @@ async fn main() -> Result<()> {
     // Initialize logging (default to warn if quiet is enabled, otherwise info)
     let default_log_level = if cli.quiet { "warn" } else { "info" };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level)).init();
+
+    // Load prompt file if specified
+    let mut final_prompt = cli.prompt.clone();
+    if let Some(prompt_path) = &cli.prompt_file {
+        let file_content = std::fs::read_to_string(prompt_path)
+            .with_context(|| format!("Failed to read prompt file: {:?}", prompt_path))?;
+
+        if let Some(existing) = &mut final_prompt {
+            existing.push_str("\n\n");
+            existing.push_str(&file_content);
+        } else {
+            final_prompt = Some(file_content);
+        }
+    }
 
     // Load config from config.toml
     let user_config = match config::load_config() {
@@ -79,14 +93,14 @@ async fn main() -> Result<()> {
     }
 
     // Checking if we got nothing out of both processes AND there's no custom prompt
-    if !context_found && cli.prompt.is_none() {
+    if !context_found && final_prompt.is_none() {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
     }
 
     // Build the final output applying the selected format abstraction
     let output = format::format_output(
         &resolved_format,
-        cli.prompt.as_deref(),
+        final_prompt.as_deref(),
         fs_data.as_ref(),
         db_data.as_deref(),
     );

@@ -23,8 +23,12 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Prepend a prompt to the generated context
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output Options")]
     pub prompt: Option<String>,
+
+    /// Read a prompt from a file to prepend to the generated context
+    #[arg(long, help_heading = "Output Options")]
+    pub prompt_file: Option<PathBuf>,
 
     /// Shortcut to scan a specific folder inside your OS config directory (e.g., --config nvim)
     #[arg(long, help_heading = "File Scanning")]
