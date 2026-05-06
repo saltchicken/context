@@ -121,7 +121,15 @@ pub fn build_config(
         final_include = vec!["**".into()];
     }
 
-    let hardcoded_excludes = vec!["**/.git/**".into(), "**/*.venv".into()];
+    let hardcoded_excludes = vec![
+        "**/.git/**".into(),
+        "**/*.venv".into(),
+        "**/.env*".into(),
+        "**/*.pem".into(),
+        "**/*.key".into(),
+        "**/id_rsa*".into(),
+        "**/secrets.json".into(),
+    ];
 
     let final_exclude = combine_lists(vec![
         Some(hardcoded_excludes),
