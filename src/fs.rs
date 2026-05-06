@@ -186,6 +186,10 @@ fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
     use std::io::Read;
     let mut file = fs::File::open(path)?;
 
+    // Optimizing Capacity Allocations: Avoid extending arrays and reallocating heavily in a loop.
+    let metadata = file.metadata()?;
+    let file_size = metadata.len() as usize;
+
     let mut chunk = [0; 8192];
     let n = file.read(&mut chunk)?;
 
@@ -197,7 +201,7 @@ fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
         return Ok(FileReadResult::Binary);
     }
 
-    let mut buffer = Vec::new();
+    let mut buffer = Vec::with_capacity(file_size);
     buffer.extend_from_slice(&chunk[..n]);
     file.read_to_end(&mut buffer)?;
 
