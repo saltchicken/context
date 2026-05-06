@@ -244,10 +244,13 @@ fn truncate_json_strings(val: &mut serde_json::Value, max_len: usize) {
     }
     match val {
         serde_json::Value::String(s) => {
-            if s.chars().count() > max_len {
-                let mut truncated: String = s.chars().take(max_len).collect();
-                truncated.push_str("...");
-                *s = truncated;
+            // Optimization: Skip O(N) characters iteration for naturally short strings
+            if s.len() > max_len {
+                if s.chars().count() > max_len {
+                    let mut truncated: String = s.chars().take(max_len).collect();
+                    truncated.push_str("...");
+                    *s = truncated;
+                }
             }
         }
         serde_json::Value::Array(arr) => {
