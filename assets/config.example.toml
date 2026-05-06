@@ -8,5 +8,6 @@ git_root = false
 # You can now specify different sets and select them using: context --instructions <name>
 [instructions]
 default = ""
+developer = "You are a senior developer. Please review the following code for optimizations and security vulnerabilities."
 review = "Review the provided code for security vulnerabilities and suggest improvements."
 test = "Write comprehensive unit tests for the provided files."
