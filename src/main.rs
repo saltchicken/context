@@ -36,6 +36,42 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Determine instruction preset to use
+    let mut final_instructions: Option<String> = None;
+
+    if let Some(cli_inst) = &cli.instructions {
+        // User provided an instruction string via CLI
+        let mut matched_preset = false;
+
+        if let Some(inst_cfg) = &user_config.instructions {
+            if let config::InstructionsConfig::Map(m) = inst_cfg {
+                if let Some(preset_val) = m.get(cli_inst) {
+                    final_instructions = Some(preset_val.clone());
+                    matched_preset = true;
+                }
+            }
+        }
+
+        // If it didn't match a preset in the map, treat the CLI argument as the literal instruction string
+        if !matched_preset {
+            final_instructions = Some(cli_inst.clone());
+        }
+    } else {
+        // No CLI instruction provided. Fall back to config "default" if available.
+        if let Some(inst_cfg) = &user_config.instructions {
+            match inst_cfg {
+                config::InstructionsConfig::Single(s) => {
+                    final_instructions = Some(s.clone());
+                }
+                config::InstructionsConfig::Map(m) => {
+                    if let Some(s) = m.get("default") {
+                        final_instructions = Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // Apply config defaults to CLI options
     cli.git_root = (cli.git_root || user_config.git_root.unwrap_or(false)) && !cli.no_git_root;
     let resolved_format = cli
@@ -100,8 +136,10 @@ async fn main() -> Result<()> {
     // Build the final output applying the selected format abstraction
     let output = format::format_output(
         &resolved_format,
-        user_config.instructions.as_deref(),
-        final_prompt.as_deref(),
+        final_instructions
+            .as_deref()
+            .filter(|s| !s.trim().is_empty()),
+        final_prompt.as_deref().filter(|s| !s.trim().is_empty()),
         fs_data.as_ref(),
         db_data.as_deref(),
     );

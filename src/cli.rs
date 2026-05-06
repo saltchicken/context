@@ -30,6 +30,10 @@ pub struct Cli {
     #[arg(long, help_heading = "Output Options")]
     pub prompt_file: Option<PathBuf>,
 
+    /// Choose an instruction preset from config to prepend (defaults to "default")
+    #[arg(short = 'i', long, help_heading = "Output Options")]
+    pub instructions: Option<String>,
+
     /// Shortcut to scan a specific folder inside your OS config directory (e.g., --config nvim)
     #[arg(long, help_heading = "File Scanning")]
     pub config: Option<String>,

@@ -1,13 +1,24 @@
 use crate::format::OutputFormat;
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
+
+/// Uses untagged deserialization to be fully backwards-compatible
+/// with users who have single strings defined in their current config.toml
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum InstructionsConfig {
+    Single(String),
+    Map(HashMap<String, String>),
+}
 
 #[derive(Deserialize, Debug, Default)]
 pub struct UserConfig {
     pub format: Option<OutputFormat>,
     pub git_root: Option<bool>,
-    pub instructions: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<InstructionsConfig>,
 }
 
 pub fn load_config() -> Result<UserConfig> {
