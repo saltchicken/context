@@ -22,7 +22,6 @@ try:
 except ImportError:
     pathspec = None
 
-
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_CONFIG_TOML = """\
 # Default output format (xml, markdown, json)
@@ -64,12 +63,11 @@ exclude = ["**/__pycache__/**", "**/.venv/**", "**/venv/**"]
 # --- LOGGING SETUP ---
 logger = logging.getLogger("context")
 
-
 # --- DATA STRUCTURES ---
 @dataclass
 class FileEntry:
     path: Path
-    relative_path: str
+    display_path: str
     depth: int
     is_dir: bool
     include_content: bool
@@ -96,7 +94,7 @@ class RuntimeConfig:
     max_size: int
     max_files: int
     force: bool
-
+    absolute_paths: bool
 
 # --- HELPER FUNCTIONS ---
 def get_config_dir() -> Path:
@@ -180,7 +178,6 @@ def read_text_file(path: Path) -> Tuple[str, Optional[str]]:
     except Exception as e:
         return "Error", str(e)
 
-
 # --- CONFIGURATION RESOLUTION ---
 class ConfigManager:
     def __init__(self):
@@ -243,9 +240,9 @@ class ConfigManager:
             tree_only_output=args.tree,
             max_size=args.max_size,
             max_files=args.max_files,
-            force=args.force
+            force=args.force,
+            absolute_paths=args.absolute_paths
         )
-
 
 # --- SCANNER ---
 class Scanner:
@@ -303,9 +300,10 @@ class Scanner:
             # Add directory entry if it's not the root
             if current_dir != self.root:
                 depth = len(rel_dir.parts)
+                display_path = str(current_dir.resolve()) if self.config.absolute_paths else rel_dir_str
                 entries.append(FileEntry(
                     path=current_dir,
-                    relative_path=rel_dir_str,
+                    display_path=display_path,
                     depth=depth,
                     is_dir=True,
                     include_content=False,
@@ -338,9 +336,10 @@ class Scanner:
                     continue
 
                 depth = len(rel_file.parts)
+                display_path = str(file_path.resolve()) if self.config.absolute_paths else rel_file_str
                 entries.append(FileEntry(
                     path=file_path,
-                    relative_path=rel_file_str,
+                    display_path=display_path,
                     depth=depth,
                     is_dir=False,
                     include_content=matches_include and not matches_tree,
@@ -350,7 +349,6 @@ class Scanner:
         # Sort entries properly to guarantee tree coherence
         entries.sort(key=lambda e: e.path)
         return entries
-
 
 # --- FORMATTERS ---
 class Formatter:
@@ -427,7 +425,6 @@ class Formatter:
         except Exception as e:
             return f'{{"error": "Failed to serialize to JSON: {e}"}}'
 
-
 # --- MAIN EXECUTION ---
 def gather_fs(target_dir: Path, config: RuntimeConfig) -> Optional[FsData]:
     if not target_dir.exists():
@@ -453,8 +450,9 @@ def gather_fs(target_dir: Path, config: RuntimeConfig) -> Optional[FsData]:
     tree_out = []
     for entry in entries:
         indent = "    " * max(0, entry.depth - 1)
+        name = entry.display_path if config.absolute_paths else entry.path.name
         marker = "/" if entry.is_dir else ("" if entry.include_content else " (content excluded)")
-        tree_out.append(f"{indent}{entry.path.name}{marker}")
+        tree_out.append(f"{indent}{name}{marker}")
     tree_str = "\n".join(tree_out)
 
     # Gather File Contents
@@ -463,18 +461,18 @@ def gather_fs(target_dir: Path, config: RuntimeConfig) -> Optional[FsData]:
         for entry in entries:
             if entry.include_content:
                 if entry.exceeds_size:
-                    files.append(FileData(entry.relative_path, None, "File exceeds maximum size limit.", None))
+                    files.append(FileData(entry.display_path, None, "File exceeds maximum size limit.", None))
                     continue
 
                 status, content = read_text_file(entry.path)
                 if status == "Text":
-                    files.append(FileData(entry.relative_path, content, None, None))
+                    files.append(FileData(entry.display_path, content, None, None))
                 elif status == "Binary":
-                    files.append(FileData(entry.relative_path, None, None, "Binary file detected."))
+                    files.append(FileData(entry.display_path, None, None, "Binary file detected."))
                 elif status == "NonUtf8":
-                    files.append(FileData(entry.relative_path, None, None, "Non-UTF-8 text / binary file detected."))
+                    files.append(FileData(entry.display_path, None, None, "Non-UTF-8 text / binary file detected."))
                 else:
-                    files.append(FileData(entry.relative_path, None, f"Error reading file: {content}", None))
+                    files.append(FileData(entry.display_path, None, f"Error reading file: {content}", None))
 
     return FsData(tree=tree_str, files=files)
 
@@ -496,6 +494,7 @@ def main():
     parser.add_argument("--max-size", type=int, default=1048576, help="Skip files larger than this size in bytes (default: 1MB)")
     parser.add_argument("--max-files", type=int, default=10000, help="Stop scanning after this many files (default: 10000)")
     parser.add_argument("--force", action="store_true", help="Force scanning of sensitive directories")
+    parser.add_argument("--absolute-paths", action="store_true", help="Output absolute paths instead of relative paths in the tree and file blocks")
 
     args = parser.parse_args()
 
