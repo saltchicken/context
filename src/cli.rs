@@ -10,9 +10,9 @@ use std::path::PathBuf;
     about = "A universal tool to gather file, codebase, and database context for LLMs"
 )]
 pub struct Cli {
-    /// Path to scan for files (defaults to current directory)
-    #[arg(default_value = ".")]
-    pub path: PathBuf,
+    /// Paths to scan for files (defaults to current directory)
+    #[arg(default_value = ".", num_args = 1..)]
+    pub paths: Vec<PathBuf>,
 
     /// Choose the output format (overrides config.toml)
     #[arg(long, value_enum, help_heading = "Output Options")]

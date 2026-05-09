@@ -58,6 +58,7 @@ pub struct FileData {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FsData {
+    pub project_name: String,
     pub tree: String,
     pub files: Vec<FileData>,
 }
@@ -110,7 +111,7 @@ pub fn build_config(
     force: bool,
     absolute_paths: bool,
 ) -> Result<RuntimeConfig> {
-    let presets_file = load_presets_file()?;
+    let presets_file = load_presets_file().unwrap_or_default();
 
     let global = presets_file.global;
     let preset = preset_name
@@ -332,7 +333,7 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
+fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
     let mut tree_out = String::new();
 
     // If absolute paths are used, we typically don't want a deeply nested tree
@@ -411,6 +412,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
     }
 
     FsData {
+        project_name,
         tree: tree_out.trim_end().to_string(),
         files,
     }
@@ -426,31 +428,40 @@ pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Resolves the intended target directory from CLI inputs and applies git root discovery
-pub fn resolve_target_dir(args: &Cli) -> Result<PathBuf> {
-    let initial_target = if let Some(config_name) = &args.config {
-        dirs::config_dir()
-            .context("Could not determine config directory")?
-            .join(config_name)
-    } else {
-        let current_dir = env::current_dir().context("Failed to get current directory")?;
-        current_dir.join(&args.path)
-    };
+/// Resolves the intended target directories from CLI inputs and applies git root discovery
+pub fn resolve_target_dirs(args: &Cli) -> Result<Vec<PathBuf>> {
+    let mut resolved = Vec::new();
 
-    let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
-
-    if args.git_root {
-        if let Some(git_root) = find_git_root(&target_dir) {
-            target_dir = git_root;
+    for path_str in &args.paths {
+        let initial_target = if let Some(config_name) = &args.config {
+            dirs::config_dir()
+                .context("Could not determine config directory")?
+                .join(config_name)
         } else {
-            log::warn!(
-                "⚠️ --git-root specified, but no .git directory found. Falling back to {:?}",
-                target_dir
-            );
+            let current_dir = env::current_dir().context("Failed to get current directory")?;
+            current_dir.join(path_str)
+        };
+
+        let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
+
+        if args.git_root {
+            if let Some(git_root) = find_git_root(&target_dir) {
+                target_dir = git_root;
+            } else {
+                log::warn!(
+                    "⚠️ --git-root specified, but no .git directory found. Falling back to {:?}",
+                    target_dir
+                );
+            }
+        }
+
+        // Deduplicate
+        if !resolved.contains(&target_dir) {
+            resolved.push(target_dir);
         }
     }
 
-    Ok(target_dir)
+    Ok(resolved)
 }
 
 pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
@@ -481,6 +492,26 @@ pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
         return Ok(None);
     }
 
-    let data = gather_data(&entries, &config);
+    let resolved_name = project_name.unwrap_or("unknown").to_string();
+    let data = gather_data(resolved_name, &entries, &config);
     Ok(Some(data))
+}
+
+/// Wraps the single `gather` function to aggregate multiple projects
+pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec<FsData>>> {
+    let mut results = Vec::new();
+
+    for dir in target_dirs {
+        match gather(dir, args) {
+            Ok(Some(data)) => results.push(data),
+            Ok(None) => {}, // Skip if empty
+            Err(e) => log::warn!("Failed to gather context for {:?}: {}", dir, e),
+        }
+    }
+
+    if results.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(results))
+    }
 }

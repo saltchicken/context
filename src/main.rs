@@ -79,11 +79,13 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or(user_config.format.unwrap_or(format::OutputFormat::Xml));
 
-    // Resolve target directory after merging config and CLI arguments
-    let target_dir = fs::resolve_target_dir(&cli)?;
+    // Resolve target directories after merging config and CLI arguments
+    let target_dirs = fs::resolve_target_dirs(&cli)?;
 
-    // Try to load .env from the target directory
-    dotenvy::from_path(target_dir.join(".env")).ok();
+    // Try to load .env from the first resolved directory as a primary guess
+    if let Some(first_dir) = target_dirs.first() {
+        dotenvy::from_path(first_dir.join(".env")).ok();
+    }
 
     // Fallback to standard CWD dotenv
     dotenvy::dotenv().ok();
@@ -93,20 +95,16 @@ async fn main() -> Result<()> {
     let has_code_args =
         cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
 
-    // Run file scanner if:
-    // 1. Explicitly requested via code arguments (has_code_args)
-    // 2. The user passed --sql (which defaults to pulling both file and sql context)
-    // 3. No database flags were provided at all (!run_db)
-    // This implies using --db-url exclusively will only pull SQL context.
+    // Run file scanner if explicitly requested or if no database flags were provided at all
     let run_fs = has_code_args || cli.sql || !run_db;
 
     let mut fs_data = None;
     let mut db_data = None;
     let mut context_found = false;
 
-    // 1. Gather File/Code Context
+    // 1. Gather File/Code Context across multiple directories
     if run_fs {
-        match fs::gather(&target_dir, &cli) {
+        match fs::gather_multiple(&target_dirs, &cli) {
             Ok(Some(data)) => {
                 fs_data = Some(data);
                 context_found = true;
@@ -140,7 +138,7 @@ async fn main() -> Result<()> {
             .as_deref()
             .filter(|s| !s.trim().is_empty()),
         final_prompt.as_deref().filter(|s| !s.trim().is_empty()),
-        fs_data.as_ref(),
+        fs_data.as_deref(), // Using deref to access the slice of projects
         db_data.as_deref(),
     );
     let trimmed_output = output.trim();
@@ -151,12 +149,9 @@ async fn main() -> Result<()> {
 
         // Skip printing stats if the user requested the tree view exclusively or enabled quiet mode
         if !cli.tree && !cli.quiet {
-            // Calculate statistics
             let lines = trimmed_output.lines().count();
-            // A common rough estimate for LLMs: 1 token ≈ 4 chars
             let approx_tokens = trimmed_output.len() / 4;
 
-            // Print stats to STDERR so it doesn't get piped to wl-copy or output files
             eprintln!(
                 "\n✅ Context generated: {} lines, ~{} tokens",
                 lines, approx_tokens

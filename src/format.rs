@@ -1,5 +1,5 @@
 use crate::db::TableData;
-use crate::fs::{FileData, FsData};
+use crate::fs::FsData;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -21,9 +21,7 @@ struct JsonOutput<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    directory_structure: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    files: Option<&'a [FileData]>,
+    projects: Option<&'a [FsData]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     database_schema: Option<&'a [TableData]>,
 }
@@ -32,7 +30,7 @@ pub fn format_output(
     format: &OutputFormat,
     instructions: Option<&str>,
     prompt: Option<&str>,
-    fs: Option<&FsData>,
+    fs: Option<&[FsData]>,
     db: Option<&[TableData]>,
 ) -> String {
     match format {
@@ -80,7 +78,7 @@ fn escape_xml(input: &str) -> Cow<'_, str> {
 fn estimate_capacity(
     instructions: Option<&str>,
     prompt: Option<&str>,
-    fs: Option<&FsData>,
+    fs: Option<&[FsData]>,
     db: Option<&[TableData]>,
 ) -> usize {
     let mut cap = 0;
@@ -90,14 +88,17 @@ fn estimate_capacity(
     if let Some(p) = prompt {
         cap += p.len() + 32; // Added capacity for wrapper tags or headers
     }
-    if let Some(fs) = fs {
-        cap += fs.tree.len() + 64;
-        for f in &fs.files {
-            cap += f.path.len()
-                + f.content.as_ref().map_or(0, |c| c.len())
-                + f.error.as_ref().map_or(0, |e| e.len())
-                + f.skipped.as_ref().map_or(0, |s| s.len())
-                + 128; // Wrapper tags overhead
+    if let Some(fs_list) = fs {
+        for fs_item in fs_list {
+            cap += fs_item.project_name.len() + 64; // Capacity for project tags
+            cap += fs_item.tree.len() + 64;
+            for f in &fs_item.files {
+                cap += f.path.len()
+                    + f.content.as_ref().map_or(0, |c| c.len())
+                    + f.error.as_ref().map_or(0, |e| e.len())
+                    + f.skipped.as_ref().map_or(0, |s| s.len())
+                    + 128; // Wrapper tags overhead
+            }
         }
     }
     if let Some(db) = db {
@@ -109,7 +110,7 @@ fn estimate_capacity(
 fn format_xml(
     instructions: Option<&str>,
     prompt: Option<&str>,
-    fs: Option<&FsData>,
+    fs: Option<&[FsData]>,
     db: Option<&[TableData]>,
 ) -> String {
     let capacity = estimate_capacity(instructions, prompt, fs, db);
@@ -127,38 +128,44 @@ fn format_xml(
         out.push_str("\n</prompt>\n\n");
     }
 
-    if let Some(fs) = fs {
-        out.push_str("<directory_structure>\n");
-        out.push_str(&fs.tree);
-        out.push_str("\n</directory_structure>\n\n");
+    if let Some(fs_list) = fs {
+        for fs_item in fs_list {
+            let _ = write!(out, "<project name=\"{}\">\n", escape_xml(&fs_item.project_name));
 
-        if !fs.files.is_empty() {
-            out.push_str("<file_contents>\n");
-            for f in &fs.files {
-                if let Some(err) = &f.error {
-                    let _ = write!(
-                        out,
-                        "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n\n",
-                        escape_xml(&f.path),
-                        escape_xml(err)
-                    );
-                } else if let Some(skip) = &f.skipped {
-                    let _ = write!(
-                        out,
-                        "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n\n",
-                        escape_xml(&f.path),
-                        escape_xml(skip)
-                    );
-                } else if let Some(content) = &f.content {
-                    let _ = write!(
-                        out,
-                        "<file path=\"{}\">\n{}\n</file>\n\n",
-                        escape_xml(&f.path),
-                        content // Not escaping raw content to match original logic and LLM prompt patterns
-                    );
+            out.push_str("<directory_structure>\n");
+            out.push_str(&fs_item.tree);
+            out.push_str("\n</directory_structure>\n\n");
+
+            if !fs_item.files.is_empty() {
+                out.push_str("<file_contents>\n");
+                for f in &fs_item.files {
+                    if let Some(err) = &f.error {
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n\n",
+                            escape_xml(&f.path),
+                            escape_xml(err)
+                        );
+                    } else if let Some(skip) = &f.skipped {
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n\n",
+                            escape_xml(&f.path),
+                            escape_xml(skip)
+                        );
+                    } else if let Some(content) = &f.content {
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\">\n{}\n</file>\n\n",
+                            escape_xml(&f.path),
+                            content // Not escaping raw content to match original logic and LLM prompt patterns
+                        );
+                    }
                 }
+                out.push_str("</file_contents>\n\n");
             }
-            out.push_str("</file_contents>\n\n");
+
+            out.push_str("</project>\n\n");
         }
     }
 
@@ -232,7 +239,7 @@ fn format_xml(
 fn format_markdown(
     instructions: Option<&str>,
     prompt: Option<&str>,
-    fs: Option<&FsData>,
+    fs: Option<&[FsData]>,
     db: Option<&[TableData]>,
 ) -> String {
     let capacity = estimate_capacity(instructions, prompt, fs, db);
@@ -250,27 +257,31 @@ fn format_markdown(
         out.push_str("\n\n");
     }
 
-    if let Some(fs) = fs {
-        out.push_str("## Directory Structure\n\n```\n");
-        out.push_str(&fs.tree);
-        out.push_str("\n```\n\n");
+    if let Some(fs_list) = fs {
+        for fs_item in fs_list {
+            let _ = write!(out, "## Project: `{}`\n\n", fs_item.project_name);
 
-        if !fs.files.is_empty() {
-            out.push_str("## File Contents\n\n");
-            for f in &fs.files {
-                let _ = write!(out, "### File: `{}`\n\n", f.path);
+            out.push_str("### Directory Structure\n\n```\n");
+            out.push_str(&fs_item.tree);
+            out.push_str("\n```\n\n");
 
-                if let Some(err) = &f.error {
-                    let _ = write!(out, "*Error: {}*\n\n", err);
-                } else if let Some(skip) = &f.skipped {
-                    let _ = write!(out, "*Skipped: {}*\n\n", skip);
-                } else if let Some(content) = &f.content {
-                    out.push_str("```\n");
-                    out.push_str(content);
-                    if !content.ends_with('\n') {
-                        out.push('\n');
+            if !fs_item.files.is_empty() {
+                out.push_str("### File Contents\n\n");
+                for f in &fs_item.files {
+                    let _ = write!(out, "#### File: `{}`\n\n", f.path);
+
+                    if let Some(err) = &f.error {
+                        let _ = write!(out, "*Error: {}*\n\n", err);
+                    } else if let Some(skip) = &f.skipped {
+                        let _ = write!(out, "*Skipped: {}*\n\n", skip);
+                    } else if let Some(content) = &f.content {
+                        out.push_str("```\n");
+                        out.push_str(content);
+                        if !content.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        out.push_str("```\n\n");
                     }
-                    out.push_str("```\n\n");
                 }
             }
         }
@@ -334,14 +345,13 @@ fn format_markdown(
 fn format_json(
     instructions: Option<&str>,
     prompt: Option<&str>,
-    fs: Option<&FsData>,
+    fs: Option<&[FsData]>,
     db: Option<&[TableData]>,
 ) -> String {
     let output = JsonOutput {
         instructions,
         prompt,
-        directory_structure: fs.map(|f| f.tree.as_str()),
-        files: fs.map(|f| f.files.as_slice()),
+        projects: fs,
         database_schema: db,
     };
     serde_json::to_string_pretty(&output)
