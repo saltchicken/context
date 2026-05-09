@@ -78,6 +78,10 @@ pub struct Cli {
     #[arg(long, help_heading = "File Scanning")]
     pub force: bool,
 
+    /// Output absolute paths instead of relative paths in the tree and file blocks
+    #[arg(long, help_heading = "File Scanning")]
+    pub absolute_paths: bool,
+
     /// Include database schema context (reads DB_URL from env)
     #[arg(long, help_heading = "Database Options")]
     pub sql: bool,

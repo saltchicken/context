@@ -34,13 +34,14 @@ pub struct RuntimeConfig {
     pub max_size: u64,
     pub max_files: usize,
     pub force: bool,
+    pub absolute_paths: bool,
 }
 
 /// Represents a single file discovered during the scan.
 #[derive(Debug)]
 pub struct FileEntry {
     pub path: PathBuf,
-    pub relative_path: String,
+    pub display_path: String,
     pub depth: usize,
     pub is_dir: bool,
     pub include_content: bool,
@@ -97,6 +98,7 @@ fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
     combined
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_config(
     preset_name: Option<&str>,
     include: Option<Vec<String>>,
@@ -106,6 +108,7 @@ pub fn build_config(
     max_size: u64,
     max_files: usize,
     force: bool,
+    absolute_paths: bool,
 ) -> Result<RuntimeConfig> {
     let presets_file = load_presets_file()?;
 
@@ -152,6 +155,7 @@ pub fn build_config(
         max_size,
         max_files,
         force,
+        absolute_paths,
     })
 }
 
@@ -167,6 +171,7 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
         args.max_size,
         args.max_files,
         args.force,
+        args.absolute_paths,
     )
 }
 
@@ -226,6 +231,7 @@ pub struct Scanner {
     tree_only_set: GlobSet,
     max_size: u64,
     max_files: usize,
+    absolute_paths: bool,
 }
 
 impl Scanner {
@@ -237,6 +243,7 @@ impl Scanner {
             tree_only_set: build_globset(&config.include_in_tree)?,
             max_size: config.max_size,
             max_files: config.max_files,
+            absolute_paths: config.absolute_paths,
         })
     }
 
@@ -297,10 +304,18 @@ impl Scanner {
         }
 
         let depth = relative.components().count();
+        let display_path = if self.absolute_paths {
+            path.canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf())
+                .to_string_lossy()
+                .to_string()
+        } else {
+            relative_str.to_string()
+        };
 
         Some(FileEntry {
             path: path.to_path_buf(),
-            relative_path: relative_str.to_string(),
+            display_path,
             depth,
             is_dir,
             include_content: !is_dir && matches_include && !matches_tree,
@@ -319,9 +334,18 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 
 fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
     let mut tree_out = String::new();
+
+    // If absolute paths are used, we typically don't want a deeply nested tree
+    // because each path is self-contained. For now, we'll keep the visual indentation
+    // but the node text will be the full absolute path.
     for entry in entries {
         let indent = "    ".repeat(entry.depth.saturating_sub(1));
-        let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+        
+        let name = if config.absolute_paths {
+            &entry.display_path
+        } else {
+            entry.path.file_name().unwrap_or_default().to_str().unwrap_or_default()
+        };
 
         let marker = if entry.is_dir {
             "/"
@@ -340,7 +364,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
             if entry.include_content {
                 if entry.exceeds_size {
                     files.push(FileData {
-                        path: entry.relative_path.clone(),
+                        path: entry.display_path.clone(),
                         content: None,
                         error: Some("File exceeds maximum size limit.".into()),
                         skipped: None,
@@ -351,7 +375,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
                 match read_text_file(&entry.path) {
                     Ok(FileReadResult::Text(content)) => {
                         files.push(FileData {
-                            path: entry.relative_path.clone(),
+                            path: entry.display_path.clone(),
                             content: Some(content),
                             error: None,
                             skipped: None,
@@ -359,7 +383,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
                     }
                     Ok(FileReadResult::Binary) => {
                         files.push(FileData {
-                            path: entry.relative_path.clone(),
+                            path: entry.display_path.clone(),
                             content: None,
                             error: None,
                             skipped: Some("Binary file detected.".into()),
@@ -367,7 +391,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
                     }
                     Ok(FileReadResult::NonUtf8) => {
                         files.push(FileData {
-                            path: entry.relative_path.clone(),
+                            path: entry.display_path.clone(),
                             content: None,
                             error: None,
                             skipped: Some("Non-UTF-8 text / binary file detected.".into()),
@@ -375,7 +399,7 @@ fn gather_data(entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
                     }
                     Err(e) => {
                         files.push(FileData {
-                            path: entry.relative_path.clone(),
+                            path: entry.display_path.clone(),
                             content: None,
                             error: Some(format!("Error reading file: {}", e)),
                             skipped: None,
