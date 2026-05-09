@@ -82,6 +82,7 @@ class FileData:
 
 @dataclass
 class FsData:
+    project_name: str
     tree: str
     files: List[FileData]
 
@@ -353,80 +354,95 @@ class Scanner:
 # --- FORMATTERS ---
 class Formatter:
     @staticmethod
-    def format_output(fmt: str, instructions: Optional[str], prompt: Optional[str], fs_data: Optional[FsData]) -> str:
+    def format_output(fmt: str, instructions: Optional[str], prompt: Optional[str], fs_data_list: Optional[List[FsData]]) -> str:
         if fmt == "xml":
-            return Formatter._format_xml(instructions, prompt, fs_data)
+            return Formatter._format_xml(instructions, prompt, fs_data_list)
         elif fmt == "markdown":
-            return Formatter._format_markdown(instructions, prompt, fs_data)
+            return Formatter._format_markdown(instructions, prompt, fs_data_list)
         elif fmt == "json":
-            return Formatter._format_json(instructions, prompt, fs_data)
+            return Formatter._format_json(instructions, prompt, fs_data_list)
         return ""
 
     @staticmethod
-    def _format_xml(instructions: Optional[str], prompt: Optional[str], fs: Optional[FsData]) -> str:
+    def _format_xml(instructions: Optional[str], prompt: Optional[str], fs_data_list: Optional[List[FsData]]) -> str:
         out = []
         if instructions:
             out.append(f"<instructions>\n{instructions}\n</instructions>\n")
         if prompt:
             out.append(f"<prompt>\n{prompt}\n</prompt>\n")
             
-        if fs:
-            out.append(f"<directory_structure>\n{fs.tree}\n</directory_structure>\n")
-            if fs.files:
-                out.append("<file_contents>")
-                for f in fs.files:
-                    if f.error:
-                        out.append(f'<file path="{escape_xml(f.path)}" error="true">\nError: {escape_xml(f.error)}\n</file>\n')
-                    elif f.skipped:
-                        out.append(f'<file path="{escape_xml(f.path)}" skipped="true">\nSkipped: {escape_xml(f.skipped)}\n</file>\n')
-                    elif f.content is not None:
-                        out.append(f'<file path="{escape_xml(f.path)}">\n{f.content}\n</file>\n')
-                out.append("</file_contents>\n")
+        if fs_data_list:
+            for fs in fs_data_list:
+                out.append(f'<project name="{escape_xml(fs.project_name)}">')
+                out.append(f"<directory_structure>\n{fs.tree}\n</directory_structure>\n")
+                if fs.files:
+                    out.append("<file_contents>")
+                    for f in fs.files:
+                        if f.error:
+                            out.append(f'<file path="{escape_xml(f.path)}" error="true">\nError: {escape_xml(f.error)}\n</file>\n')
+                        elif f.skipped:
+                            out.append(f'<file path="{escape_xml(f.path)}" skipped="true">\nSkipped: {escape_xml(f.skipped)}\n</file>\n')
+                        elif f.content is not None:
+                            out.append(f'<file path="{escape_xml(f.path)}">\n{f.content}\n</file>\n')
+                    out.append("</file_contents>\n")
+                out.append("</project>\n")
+                
         return "\n".join(out).strip()
 
     @staticmethod
-    def _format_markdown(instructions: Optional[str], prompt: Optional[str], fs: Optional[FsData]) -> str:
+    def _format_markdown(instructions: Optional[str], prompt: Optional[str], fs_data_list: Optional[List[FsData]]) -> str:
         out = []
         if instructions:
             out.append(f"## Instructions\n\n{instructions}\n")
         if prompt:
             out.append(f"## Prompt\n\n{prompt}\n")
             
-        if fs:
-            out.append(f"## Directory Structure\n\n```\n{fs.tree}\n```\n")
-            if fs.files:
-                out.append("## File Contents\n")
-                for f in fs.files:
-                    out.append(f"### File: `{f.path}`\n")
-                    if f.error:
-                        out.append(f"*Error: {f.error}*\n")
-                    elif f.skipped:
-                        out.append(f"*Skipped: {f.skipped}*\n")
-                    elif f.content is not None:
-                        content_str = f.content
-                        if not content_str.endswith("\n"):
-                            content_str += "\n"
-                        out.append(f"```\n{content_str}```\n")
+        if fs_data_list:
+            for fs in fs_data_list:
+                out.append(f"## Project: `{fs.project_name}`\n")
+                out.append(f"### Directory Structure\n\n```\n{fs.tree}\n```\n")
+                if fs.files:
+                    out.append("### File Contents\n")
+                    for f in fs.files:
+                        out.append(f"#### File: `{f.path}`\n")
+                        if f.error:
+                            out.append(f"*Error: {f.error}*\n")
+                        elif f.skipped:
+                            out.append(f"*Skipped: {f.skipped}*\n")
+                        elif f.content is not None:
+                            content_str = f.content
+                            if not content_str.endswith("\n"):
+                                content_str += "\n"
+                            out.append(f"```\n{content_str}```\n")
+                            
         return "\n".join(out).strip()
 
     @staticmethod
-    def _format_json(instructions: Optional[str], prompt: Optional[str], fs: Optional[FsData]) -> str:
+    def _format_json(instructions: Optional[str], prompt: Optional[str], fs_data_list: Optional[List[FsData]]) -> str:
         output_dict = {}
         if instructions: output_dict["instructions"] = instructions
         if prompt: output_dict["prompt"] = prompt
-        if fs:
-            output_dict["directory_structure"] = fs.tree
-            output_dict["files"] = [
-                {k: v for k, v in f.__dict__.items() if v is not None}
-                for f in fs.files
+        
+        if fs_data_list:
+            output_dict["projects"] = [
+                {
+                    "project_name": fs.project_name,
+                    "tree": fs.tree,
+                    "files": [
+                        {k: v for k, v in f.__dict__.items() if v is not None}
+                        for f in fs.files
+                    ]
+                }
+                for fs in fs_data_list
             ]
+            
         try:
             return json.dumps(output_dict, indent=2)
         except Exception as e:
             return f'{{"error": "Failed to serialize to JSON: {e}"}}'
 
 # --- MAIN EXECUTION ---
-def gather_fs(target_dir: Path, config: RuntimeConfig) -> Optional[FsData]:
+def gather_fs(target_dir: Path, config: RuntimeConfig, project_name: str) -> Optional[FsData]:
     if not target_dir.exists():
         logger.error(f"Target directory does not exist: {target_dir}")
         return None
@@ -474,11 +490,12 @@ def gather_fs(target_dir: Path, config: RuntimeConfig) -> Optional[FsData]:
                 else:
                     files.append(FileData(entry.display_path, None, f"Error reading file: {content}", None))
 
-    return FsData(tree=tree_str, files=files)
+    return FsData(project_name=project_name, tree=tree_str, files=files)
 
 def main():
     parser = argparse.ArgumentParser(description="A universal tool to gather file and codebase context for LLMs.")
-    parser.add_argument("path", nargs="?", default=".", help="Path to scan for files (defaults to current directory)")
+    # Notice we changed "path" to "paths" and using nargs="*"
+    parser.add_argument("paths", nargs="*", default=["."], help="Paths to scan for files (defaults to current directory)")
     parser.add_argument("--format", choices=["xml", "markdown", "json"], help="Choose the output format")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress stderr output (e.g., stats and info logs)")
     parser.add_argument("--prompt", help="Prepend a prompt to the generated context")
@@ -521,27 +538,38 @@ def main():
     use_git_root = (args.git_root or user_config.get("git_root", False)) and not args.no_git_root
     output_format = args.format or user_config.get("format", "xml")
 
-    # Resolve target directory
-    if args.config:
-        target_dir = get_config_dir().parent / args.config
-    else:
-        target_dir = Path(args.path).resolve()
-
-    if use_git_root:
-        git_root = find_git_root(target_dir)
-        if git_root:
-            target_dir = git_root
+    # Resolve target directories
+    target_dirs = []
+    # If the user provides --config, it overrides the standard paths
+    paths_to_scan = args.paths if not args.config else ["."]
+    
+    for path_str in paths_to_scan:
+        if args.config:
+            initial_target = get_config_dir().parent / args.config
         else:
-            logger.warning(f"⚠️ --git-root specified, but no .git directory found. Falling back to {target_dir}")
+            initial_target = Path(path_str).resolve()
 
-    # Build the final filtering config
-    project_name = target_dir.name
-    runtime_config = cfg_manager.build_runtime_config(args, fallback_preset=project_name)
+        target_dir = initial_target
+        if use_git_root:
+            git_root = find_git_root(target_dir)
+            if git_root:
+                target_dir = git_root
+            else:
+                logger.warning(f"⚠️ --git-root specified, but no .git directory found. Falling back to {target_dir}")
 
-    # Gather data
-    fs_data = gather_fs(target_dir, runtime_config)
+        if target_dir not in target_dirs:
+            target_dirs.append(target_dir)
 
-    if not fs_data and not final_prompt:
+    # Gather data across multiple directories
+    fs_data_list = []
+    for target_dir in target_dirs:
+        project_name = target_dir.name or "unknown"
+        runtime_config = cfg_manager.build_runtime_config(args, fallback_preset=project_name)
+        fs_data = gather_fs(target_dir, runtime_config, project_name)
+        if fs_data:
+            fs_data_list.append(fs_data)
+
+    if not fs_data_list and not final_prompt:
         logger.warning("⚠️ No context generated. Try tweaking your arguments.")
 
     # Format and Output
@@ -549,7 +577,7 @@ def main():
         fmt=output_format,
         instructions=user_config.get("instructions"),
         prompt=final_prompt,
-        fs_data=fs_data
+        fs_data_list=fs_data_list if fs_data_list else None
     )
 
     if output:
