@@ -4,6 +4,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::path::Path;
 
 #[derive(ValueEnum, Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -11,6 +12,9 @@ pub enum OutputFormat {
     #[default]
     Xml,
     Markdown,
+    #[serde(rename = "xml-markdown-hybrid")]
+    #[value(name = "xml-markdown-hybrid")]
+    XmlMarkdownHybrid,
     Json,
 }
 
@@ -36,6 +40,7 @@ pub fn format_output(
     match format {
         OutputFormat::Xml => format_xml(instructions, prompt, fs, db),
         OutputFormat::Markdown => format_markdown(instructions, prompt, fs, db),
+        OutputFormat::XmlMarkdownHybrid => format_xml_markdown_hybrid(instructions, prompt, fs, db),
         OutputFormat::Json => format_json(instructions, prompt, fs, db),
     }
 }
@@ -236,6 +241,139 @@ fn format_xml(
     out.trim_end().to_string()
 }
 
+fn format_xml_markdown_hybrid(
+    instructions: Option<&str>,
+    prompt: Option<&str>,
+    fs: Option<&[FsData]>,
+    db: Option<&[TableData]>,
+) -> String {
+    let capacity = estimate_capacity(instructions, prompt, fs, db);
+    let mut out = String::with_capacity(capacity);
+
+    if let Some(i) = instructions {
+        out.push_str("<instructions>\n");
+        out.push_str(i);
+        out.push_str("\n</instructions>\n\n");
+    }
+
+    if let Some(p) = prompt {
+        out.push_str("<prompt>\n");
+        out.push_str(p);
+        out.push_str("\n</prompt>\n\n");
+    }
+
+    if let Some(fs_list) = fs {
+        for fs_item in fs_list {
+            let _ = write!(out, "<project name=\"{}\">\n", escape_xml(&fs_item.project_name));
+
+            out.push_str("<directory_structure>\n```\n");
+            out.push_str(&fs_item.tree);
+            out.push_str("\n```\n</directory_structure>\n\n");
+
+            if !fs_item.files.is_empty() {
+                out.push_str("<file_contents>\n");
+                for f in &fs_item.files {
+                    if let Some(err) = &f.error {
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n\n",
+                            escape_xml(&f.path),
+                            escape_xml(err)
+                        );
+                    } else if let Some(skip) = &f.skipped {
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n\n",
+                            escape_xml(&f.path),
+                            escape_xml(skip)
+                        );
+                    } else if let Some(content) = &f.content {
+                        let ext = Path::new(&f.path)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        let _ = write!(
+                            out,
+                            "<file path=\"{}\">\n```{}\n",
+                            escape_xml(&f.path),
+                            ext
+                        );
+                        out.push_str(content);
+                        if !content.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        out.push_str("```\n</file>\n\n");
+                    }
+                }
+                out.push_str("</file_contents>\n\n");
+            }
+
+            out.push_str("</project>\n\n");
+        }
+    }
+
+    if let Some(db) = db {
+        out.push_str("<database_schema>\n");
+        for table in db {
+            let _ = write!(out, "<table name=\"{}\">\n", escape_xml(&table.name));
+
+            if let Some(comment) = &table.comment {
+                let _ = write!(
+                    out,
+                    "  <description>{}</description>\n\n",
+                    escape_xml(comment.trim())
+                );
+            }
+
+            out.push_str("| Column | Type | Nullable | Description |\n");
+            out.push_str("| --- | --- | --- | --- |\n");
+            for col in &table.columns {
+                let desc = col.comment.as_deref().unwrap_or("").replace('\n', " ");
+                let _ = write!(
+                    out,
+                    "| `{}` | `{}` | `{}` | {} |\n",
+                    col.column_name, col.data_type, col.is_nullable, desc
+                );
+            }
+            out.push('\n');
+
+            if !table.primary_keys.is_empty() {
+                let _ = write!(
+                    out,
+                    "**Primary Keys**: `{}`\n\n",
+                    table.primary_keys.join(", ")
+                );
+            }
+
+            if !table.foreign_keys.is_empty() {
+                out.push_str("**Foreign Keys**:\n\n");
+                for fk in &table.foreign_keys {
+                    let _ = write!(
+                        out,
+                        "* `{}` -> `{}`.`{}`\n",
+                        fk.column_name, fk.foreign_table_name, fk.foreign_column_name
+                    );
+                }
+                out.push('\n');
+            }
+
+            if !table.sample_rows.is_empty() {
+                out.push_str("**Sample Data**:\n\n```json\n");
+                for row in &table.sample_rows {
+                    out.push_str(row);
+                    out.push('\n');
+                }
+                out.push_str("```\n\n");
+            }
+
+            out.push_str("</table>\n\n");
+        }
+        out.push_str("</database_schema>\n\n");
+    }
+
+    out.trim_end().to_string()
+}
+
 fn format_markdown(
     instructions: Option<&str>,
     prompt: Option<&str>,
@@ -275,7 +413,13 @@ fn format_markdown(
                     } else if let Some(skip) = &f.skipped {
                         let _ = write!(out, "*Skipped: {}*\n\n", skip);
                     } else if let Some(content) = &f.content {
-                        out.push_str("```\n");
+                        let ext = Path::new(&f.path)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        out.push_str("```");
+                        out.push_str(ext);
+                        out.push('\n');
                         out.push_str(content);
                         if !content.ends_with('\n') {
                             out.push('\n');
