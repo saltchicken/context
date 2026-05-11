@@ -266,9 +266,9 @@ fn format_xml_markdown_hybrid(
         for fs_item in fs_list {
             let _ = write!(out, "<project name=\"{}\">\n", escape_xml(&fs_item.project_name));
 
-            out.push_str("<directory_structure>\n```\n");
+            out.push_str("<directory_structure>\n");
             out.push_str(&fs_item.tree);
-            out.push_str("\n```\n</directory_structure>\n\n");
+            out.push_str("\n</directory_structure>\n\n");
 
             if !fs_item.files.is_empty() {
                 out.push_str("<file_contents>\n");
