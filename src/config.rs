@@ -1,4 +1,3 @@
-use crate::format::OutputFormat;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -15,7 +14,6 @@ pub enum InstructionsConfig {
 
 #[derive(Deserialize, Debug, Default)]
 pub struct UserConfig {
-    pub format: Option<OutputFormat>,
     pub git_root: Option<bool>,
     #[serde(default)]
     pub instructions: Option<InstructionsConfig>,

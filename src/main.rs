@@ -74,10 +74,6 @@ async fn main() -> Result<()> {
 
     // Apply config defaults to CLI options
     cli.git_root = (cli.git_root || user_config.git_root.unwrap_or(false)) && !cli.no_git_root;
-    let resolved_format = cli
-        .format
-        .clone()
-        .unwrap_or(user_config.format.unwrap_or(format::OutputFormat::Xml));
 
     // Resolve target directories after merging config and CLI arguments
     let target_dirs = fs::resolve_target_dirs(&cli)?;
@@ -131,9 +127,8 @@ async fn main() -> Result<()> {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
     }
 
-    // Build the final output applying the selected format abstraction
+    // Build the final output natively in the unified hybrid format
     let output = format::format_output(
-        &resolved_format,
         final_instructions
             .as_deref()
             .filter(|s| !s.trim().is_empty()),

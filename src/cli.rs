@@ -1,4 +1,3 @@
-use crate::format::OutputFormat;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -13,10 +12,6 @@ pub struct Cli {
     /// Paths to scan for files (defaults to current directory)
     #[arg(default_value = ".", num_args = 1..)]
     pub paths: Vec<PathBuf>,
-
-    /// Choose the output format (overrides config.toml)
-    #[arg(long, value_enum, help_heading = "Output Options")]
-    pub format: Option<OutputFormat>,
 
     /// Suppress stderr output (e.g., stats and info logs)
     #[arg(short, long, help_heading = "Output Options")]
