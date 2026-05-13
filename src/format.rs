@@ -92,7 +92,7 @@ pub fn format_output(
 
             out.push_str("<directory_structure>\n");
             out.push_str(&fs_item.tree);
-            out.push_str("\n</directory_structure>\n\n");
+            out.push_str("\n</directory_structure>\n");
 
             if !fs_item.files.is_empty() {
                 out.push_str("<file_contents>\n");
@@ -100,14 +100,14 @@ pub fn format_output(
                     if let Some(err) = &f.error {
                         let _ = write!(
                             out,
-                            "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n\n",
+                            "<file path=\"{}\" error=\"true\">\nError: {}\n</file>\n",
                             escape_xml(&f.path),
                             escape_xml(err)
                         );
                     } else if let Some(skip) = &f.skipped {
                         let _ = write!(
                             out,
-                            "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n\n",
+                            "<file path=\"{}\" skipped=\"true\">\nSkipped: {}\n</file>\n",
                             escape_xml(&f.path),
                             escape_xml(skip)
                         );
@@ -126,13 +126,13 @@ pub fn format_output(
                         if !content.ends_with('\n') {
                             out.push('\n');
                         }
-                        out.push_str("```\n</file>\n\n");
+                        out.push_str("```\n</file>\n");
                     }
                 }
-                out.push_str("</file_contents>\n\n");
+                out.push_str("</file_contents>\n");
             }
 
-            out.push_str("</project>\n\n");
+            out.push_str("</project>\n");
         }
     }
 
