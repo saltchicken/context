@@ -29,20 +29,12 @@ pub struct Cli {
     #[arg(short = 'i', long, help_heading = "Output Options")]
     pub instructions: Option<String>,
 
-    /// Shortcut to scan a specific folder inside your OS config directory (e.g., --config nvim)
-    #[arg(long, help_heading = "File Scanning")]
-    pub config: Option<String>,
-
     /// Use a predefined set of options from presets.toml
     #[arg(long, help_heading = "File Scanning")]
     pub preset: Option<String>,
 
-    /// Intelligently find and use the root of the git project as the scan path
-    #[arg(long, help_heading = "File Scanning")]
-    pub git_root: bool,
-
-    /// Disable using the root of the git project (overrides config.toml and --git-root)
-    #[arg(long, overrides_with = "git_root", help_heading = "File Scanning")]
+    /// Disable using the root of the git project (forces using the current directory)
+    #[arg(long, visible_alias = "cwd", help_heading = "File Scanning")]
     pub no_git_root: bool,
 
     /// Show only the directory tree structure (code context)

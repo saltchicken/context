@@ -4,8 +4,7 @@ use context::cli::Cli;
 use context::{config, format, fs};
 use env_logger::Env;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Parse the unified global CLI options first so we can check for flags like --quiet
     let mut cli = Cli::parse();
 
@@ -73,18 +72,10 @@ async fn main() -> Result<()> {
     }
 
     // Apply config defaults to CLI options
-    cli.git_root = (cli.git_root || user_config.git_root.unwrap_or(false)) && !cli.no_git_root;
+    cli.no_git_root = cli.no_git_root || !user_config.git_root.unwrap_or(true);
 
     // Resolve target directories after merging config and CLI arguments
     let target_dirs = fs::resolve_target_dirs(&cli)?;
-
-    // Try to load .env from the first resolved directory as a primary guess
-    if let Some(first_dir) = target_dirs.first() {
-        dotenvy::from_path(first_dir.join(".env")).ok();
-    }
-
-    // Fallback to standard CWD dotenv
-    dotenvy::dotenv().ok();
 
     let mut fs_data = None;
     let mut context_found = false;

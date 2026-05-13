@@ -90,13 +90,7 @@ fn load_presets_file() -> Result<PresetsFile> {
 }
 
 fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
-    let mut combined = Vec::new();
-    for list in lists.into_iter().flatten() {
-        combined.extend(list);
-    }
-    let mut seen = std::collections::HashSet::new();
-    combined.retain(|item| seen.insert(item.clone()));
-    combined
+    lists.into_iter().flatten().flatten().collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -428,28 +422,23 @@ pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Resolves the intended target directories from CLI inputs and applies git root discovery
 pub fn resolve_target_dirs(args: &Cli) -> Result<Vec<PathBuf>> {
     let mut resolved = Vec::new();
 
     for path_str in &args.paths {
-        let initial_target = if let Some(config_name) = &args.config {
-            dirs::config_dir()
-                .context("Could not determine config directory")?
-                .join(config_name)
-        } else {
-            let current_dir = env::current_dir().context("Failed to get current directory")?;
-            current_dir.join(path_str)
-        };
+        let current_dir = env::current_dir().context("Failed to get current directory")?;
+        let initial_target = current_dir.join(path_str);
 
         let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
 
-        if args.git_root {
+        // Follow git root logic by default unless disabled
+        if !args.no_git_root {
             if let Some(git_root) = find_git_root(&target_dir) {
                 target_dir = git_root;
             } else {
-                log::warn!(
-                    "⚠️ --git-root specified, but no .git directory found. Falling back to {:?}",
+                // FAIL explicitly if no .git directory is found in the path's ancestors
+                anyhow::bail!(
+                    "Could not find a .git repository root for {:?}. Run with --no-git-root (or --cwd) to force scanning the local directory anyway.", 
                     target_dir
                 );
             }

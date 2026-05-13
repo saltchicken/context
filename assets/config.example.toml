@@ -1,8 +1,5 @@
-# Default output format (xml, markdown, json)
-format = "xml"
-
 # Automatically find and use the root of the git project
-git_root = false
+git_root = true
 
 # Instruction sets to inject into context output
 # You can now specify different sets and select them using: context --instructions <name>
