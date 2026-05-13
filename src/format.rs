@@ -1,7 +1,6 @@
 use crate::fs::FsData;
 use std::borrow::Cow;
 use std::fmt::Write;
-use std::path::Path;
 
 /// Escapes XML characters in a single pass.
 /// Returns `Cow::Borrowed` (no allocation) if no escaping was needed.
@@ -112,21 +111,16 @@ pub fn format_output(
                             escape_xml(skip)
                         );
                     } else if let Some(content) = &f.content {
-                        let ext = Path::new(&f.path)
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("");
                         let _ = write!(
                             out,
-                            "<file path=\"{}\">\n```{}\n",
-                            escape_xml(&f.path),
-                            ext
+                            "<file path=\"{}\">\n",
+                            escape_xml(&f.path)
                         );
                         out.push_str(content);
                         if !content.ends_with('\n') {
                             out.push('\n');
                         }
-                        out.push_str("```\n</file>\n");
+                        out.push_str("</file>\n");
                     }
                 }
                 out.push_str("</file_contents>\n");
