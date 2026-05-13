@@ -6,7 +6,7 @@ use std::path::PathBuf;
     name = "context",
     author,
     version,
-    about = "A universal tool to gather file, codebase, and database context for LLMs"
+    about = "A universal tool to gather file and codebase context for LLMs"
 )]
 pub struct Cli {
     /// Paths to scan for files (defaults to current directory)
@@ -57,7 +57,7 @@ pub struct Cli {
     #[arg(long, num_args = 1.., help_heading = "File Scanning")]
     pub include_in_tree: Option<Vec<String>>,
 
-    /// Patterns to exclude (files/directories for code, or table names for SQL)
+    /// Patterns to exclude (files/directories for code)
     #[arg(long, num_args = 1.., help_heading = "File Scanning")]
     pub exclude: Option<Vec<String>>,
 
@@ -76,20 +76,4 @@ pub struct Cli {
     /// Output absolute paths instead of relative paths in the tree and file blocks
     #[arg(long, help_heading = "File Scanning")]
     pub absolute_paths: bool,
-
-    /// Include database schema context (reads DB_URL from env)
-    #[arg(long, help_heading = "Database Options")]
-    pub sql: bool,
-
-    /// Optional database connection string (triggers --sql automatically)
-    #[arg(long, help_heading = "Database Options")]
-    pub db_url: Option<String>,
-
-    /// Collect sample rows from tables (SQL mode only)
-    #[arg(long, help_heading = "Database Options")]
-    pub samples: bool,
-
-    /// Max length for string values in database sample rows (0 to disable)
-    #[arg(long, default_value = "256", help_heading = "Database Options")]
-    pub max_sample_len: usize,
 }

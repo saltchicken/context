@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use context::cli::Cli;
-use context::{config, db, format, fs};
+use context::{config, format, fs};
 use env_logger::Env;
 
 #[tokio::main]
@@ -86,55 +86,31 @@ async fn main() -> Result<()> {
     // Fallback to standard CWD dotenv
     dotenvy::dotenv().ok();
 
-    // Determine what functionality to run
-    let run_db = cli.sql || cli.db_url.is_some();
-    let has_code_args =
-        cli.include.is_some() || cli.include_in_tree.is_some() || cli.preset.is_some() || cli.tree;
-
-    // Run file scanner if explicitly requested or if no database flags were provided at all
-    let run_fs = has_code_args || cli.sql || !run_db;
-
     let mut fs_data = None;
-    let mut db_data = None;
     let mut context_found = false;
 
     // 1. Gather File/Code Context across multiple directories
-    if run_fs {
-        match fs::gather_multiple(&target_dirs, &cli) {
-            Ok(Some(data)) => {
-                fs_data = Some(data);
-                context_found = true;
-            }
-            Ok(None) => log::info!("No file content found matching criteria."),
-            Err(e) => log::error!("❌ Code scanner error: {:#}", e),
+    match fs::gather_multiple(&target_dirs, &cli) {
+        Ok(Some(data)) => {
+            fs_data = Some(data);
+            context_found = true;
         }
+        Ok(None) => log::info!("No file content found matching criteria."),
+        Err(e) => log::error!("❌ Code scanner error: {:#}", e),
     }
 
-    // 2. Gather SQL Context
-    if run_db {
-        match db::gather(&cli).await {
-            Ok(Some(data)) => {
-                db_data = Some(data);
-                context_found = true;
-            }
-            Ok(None) => log::info!("No database schema found."),
-            Err(e) => log::error!("❌ SQL scanner error: {:#}", e),
-        }
-    }
-
-    // Checking if we got nothing out of both processes AND there's no custom prompt
+    // Checking if we got nothing out of the process AND there's no custom prompt
     if !context_found && final_prompt.is_none() {
         log::warn!("⚠️ No context generated. Try tweaking your arguments.");
     }
 
-    // Build the final output natively in the unified hybrid format
+    // Build the final output natively in the format
     let output = format::format_output(
         final_instructions
             .as_deref()
             .filter(|s| !s.trim().is_empty()),
         final_prompt.as_deref().filter(|s| !s.trim().is_empty()),
         fs_data.as_deref(), // Using deref to access the slice of projects
-        db_data.as_deref(),
     );
     let trimmed_output = output.trim();
 

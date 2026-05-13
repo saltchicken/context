@@ -1,4 +1,3 @@
-use crate::db::TableData;
 use crate::fs::FsData;
 use std::borrow::Cow;
 use std::fmt::Write;
@@ -43,7 +42,6 @@ fn estimate_capacity(
     instructions: Option<&str>,
     prompt: Option<&str>,
     fs: Option<&[FsData]>,
-    db: Option<&[TableData]>,
 ) -> usize {
     let mut cap = 0;
     if let Some(i) = instructions {
@@ -65,9 +63,6 @@ fn estimate_capacity(
             }
         }
     }
-    if let Some(db) = db {
-        cap += db.len() * 1024; // Rough average estimate per table schema
-    }
     cap
 }
 
@@ -75,9 +70,8 @@ pub fn format_output(
     instructions: Option<&str>,
     prompt: Option<&str>,
     fs: Option<&[FsData]>,
-    db: Option<&[TableData]>,
 ) -> String {
-    let capacity = estimate_capacity(instructions, prompt, fs, db);
+    let capacity = estimate_capacity(instructions, prompt, fs);
     let mut out = String::with_capacity(capacity);
 
     if let Some(i) = instructions {
@@ -140,65 +134,6 @@ pub fn format_output(
 
             out.push_str("</project>\n\n");
         }
-    }
-
-    if let Some(db) = db {
-        out.push_str("<database_schema>\n");
-        for table in db {
-            let _ = write!(out, "<table name=\"{}\">\n", escape_xml(&table.name));
-
-            if let Some(comment) = &table.comment {
-                let _ = write!(
-                    out,
-                    "  <description>{}</description>\n\n",
-                    escape_xml(comment.trim())
-                );
-            }
-
-            out.push_str("| Column | Type | Nullable | Description |\n");
-            out.push_str("| --- | --- | --- | --- |\n");
-            for col in &table.columns {
-                let desc = col.comment.as_deref().unwrap_or("").replace('\n', " ");
-                let _ = write!(
-                    out,
-                    "| `{}` | `{}` | `{}` | {} |\n",
-                    col.column_name, col.data_type, col.is_nullable, desc
-                );
-            }
-            out.push('\n');
-
-            if !table.primary_keys.is_empty() {
-                let _ = write!(
-                    out,
-                    "**Primary Keys**: `{}`\n\n",
-                    table.primary_keys.join(", ")
-                );
-            }
-
-            if !table.foreign_keys.is_empty() {
-                out.push_str("**Foreign Keys**:\n\n");
-                for fk in &table.foreign_keys {
-                    let _ = write!(
-                        out,
-                        "* `{}` -> `{}`.`{}`\n",
-                        fk.column_name, fk.foreign_table_name, fk.foreign_column_name
-                    );
-                }
-                out.push('\n');
-            }
-
-            if !table.sample_rows.is_empty() {
-                out.push_str("**Sample Data**:\n\n```json\n");
-                for row in &table.sample_rows {
-                    out.push_str(row);
-                    out.push('\n');
-                }
-                out.push_str("```\n\n");
-            }
-
-            out.push_str("</table>\n\n");
-        }
-        out.push_str("</database_schema>\n\n");
     }
 
     out.trim_end().to_string()
