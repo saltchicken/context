@@ -78,9 +78,21 @@ fn main() -> Result<()> {
     let target_dirs = fs::resolve_target_dirs(&cli)?;
 
     let mut fs_data = None;
+    let mut db_data_str = None;
     let mut context_found = false;
 
-    // 1. Gather File/Code Context across multiple directories
+    // 1. Gather Database Context
+    if let Some(db_url) = &cli.db {
+        match context::db::gather(db_url) {
+            Ok(data) => {
+                db_data_str = Some(data.schema);
+                context_found = true;
+            }
+            Err(e) => log::error!("❌ Database scanner error: {:#}", e),
+        }
+    }
+
+    // 2. Gather File/Code Context across multiple directories
     match fs::gather_multiple(&target_dirs, &cli) {
         Ok(Some(data)) => {
             fs_data = Some(data);
@@ -101,6 +113,7 @@ fn main() -> Result<()> {
             .as_deref()
             .filter(|s| !s.trim().is_empty()),
         final_prompt.as_deref().filter(|s| !s.trim().is_empty()),
+        db_data_str.as_deref(),
         fs_data.as_deref(), // Using deref to access the slice of projects
     );
     let trimmed_output = output.trim();

@@ -68,4 +68,8 @@ pub struct Cli {
     /// Output absolute paths instead of relative paths in the tree and file blocks
     #[arg(long, help_heading = "File Scanning")]
     pub absolute_paths: bool,
+
+    /// PostgreSQL database connection URL to extract schema context
+    #[arg(long, help_heading = "Database Scanning")]
+    pub db: Option<String>,
 }

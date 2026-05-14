@@ -40,6 +40,7 @@ fn escape_xml(input: &str) -> Cow<'_, str> {
 fn estimate_capacity(
     instructions: Option<&str>,
     prompt: Option<&str>,
+    db: Option<&str>,
     fs: Option<&[FsData]>,
 ) -> usize {
     let mut cap = 0;
@@ -48,6 +49,9 @@ fn estimate_capacity(
     }
     if let Some(p) = prompt {
         cap += p.len() + 32; // Added capacity for wrapper tags or headers
+    }
+    if let Some(d) = db {
+        cap += d.len() + 64; // Added capacity for <database_schema> tags
     }
     if let Some(fs_list) = fs {
         for fs_item in fs_list {
@@ -68,9 +72,10 @@ fn estimate_capacity(
 pub fn format_output(
     instructions: Option<&str>,
     prompt: Option<&str>,
+    db: Option<&str>,
     fs: Option<&[FsData]>,
 ) -> String {
-    let capacity = estimate_capacity(instructions, prompt, fs);
+    let capacity = estimate_capacity(instructions, prompt, db, fs);
     let mut out = String::with_capacity(capacity);
 
     if let Some(i) = instructions {
@@ -83,6 +88,12 @@ pub fn format_output(
         out.push_str("<prompt>\n");
         out.push_str(p);
         out.push_str("\n</prompt>\n\n");
+    }
+
+    if let Some(d) = db {
+        out.push_str("<database_schema>\n");
+        out.push_str(&escape_xml(d));
+        out.push_str("\n</database_schema>\n\n");
     }
 
     if let Some(fs_list) = fs {
