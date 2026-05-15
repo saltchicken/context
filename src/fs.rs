@@ -6,7 +6,8 @@ use pathdiff::diff_paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize, Debug, Default)]
@@ -93,6 +94,72 @@ fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
     lists.into_iter().flatten().flatten().collect()
 }
 
+fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
+    let mut stdout = io::stdout();
+    write!(stdout, "⚠️ No preset found for '{}'. Initialize one? [y/N]: ", preset_name)?;
+    stdout.flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        return Ok(PresetConfig::default());
+    }
+
+    write!(stdout, "Include patterns (default: **/*): ")?;
+    stdout.flush()?;
+    let mut include_input = String::new();
+    io::stdin().read_line(&mut include_input)?;
+    let include_input = include_input.trim();
+    
+    let include_vec = if include_input.is_empty() {
+        vec!["**/*".to_string()]
+    } else {
+        include_input.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+
+    write!(stdout, "Exclude patterns (default: none): ")?;
+    stdout.flush()?;
+    let mut exclude_input = String::new();
+    io::stdin().read_line(&mut exclude_input)?;
+    let exclude_input = exclude_input.trim();
+
+    let exclude_vec = if exclude_input.is_empty() {
+        None
+    } else {
+        let parsed: Vec<String> = exclude_input
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if parsed.is_empty() { None } else { Some(parsed) }
+    };
+
+    let new_preset = PresetConfig {
+        include: Some(include_vec.clone()),
+        exclude: exclude_vec.clone(),
+        include_in_tree: None,
+    };
+
+    if let Some(config_dir) = dirs::config_dir() {
+        let presets_path = config_dir.join("context").join("presets.toml");
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&presets_path) {
+            let mut toml_block = format!("\n[\"{}\"]\n", preset_name);
+            
+            let include_fmt = include_vec.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ");
+            toml_block.push_str(&format!("include = [{}]\n", include_fmt));
+
+            if let Some(excl) = &exclude_vec {
+                let exclude_fmt = excl.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ");
+                toml_block.push_str(&format!("exclude = [{}]\n", exclude_fmt));
+            }
+
+            let _ = file.write_all(toml_block.as_bytes());
+        }
+    }
+
+    Ok(new_preset)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_config(
     preset_name: Option<&str>,
@@ -108,10 +175,15 @@ pub fn build_config(
     let presets_file = load_presets_file().unwrap_or_default();
 
     let global = presets_file.global;
-    let preset = preset_name
-        .and_then(|k| presets_file.presets.get(k))
-        .cloned()
-        .unwrap_or_default();
+    let preset = if let Some(name) = preset_name {
+        if let Some(p) = presets_file.presets.get(name) {
+            p.clone()
+        } else {
+            prompt_and_create_preset(name).unwrap_or_default()
+        }
+    } else {
+        PresetConfig::default()
+    };
 
     let mut final_include = combine_lists(vec![global.include, preset.include, include]);
 
