@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Write, IsTerminal};
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize, Debug, Default)]
@@ -95,9 +95,16 @@ fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
 }
 
 fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
-    let mut stdout = io::stdout();
-    write!(stdout, "⚠️ No preset found for '{}'. Initialize one? [y/N]: ", preset_name)?;
-    stdout.flush()?;
+    // Safety check: Don't prompt if stdin isn't a terminal (e.g., if piped from another command)
+    if !io::stdin().is_terminal() {
+        log::warn!("No preset found for '{}' and stdin is not a terminal. Skipping initialization.", preset_name);
+        return Ok(PresetConfig::default());
+    }
+
+    // Use stderr instead of stdout so the prompt remains visible when piping to wl-copy
+    let mut stderr = io::stderr();
+    write!(stderr, "⚠️ No preset found for '{}'. Initialize one? [y/N]: ", preset_name)?;
+    stderr.flush()?;
 
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
@@ -105,8 +112,8 @@ fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
         return Ok(PresetConfig::default());
     }
 
-    write!(stdout, "Include patterns (default: **/*): ")?;
-    stdout.flush()?;
+    write!(stderr, "Include patterns (default: **/*): ")?;
+    stderr.flush()?;
     let mut include_input = String::new();
     io::stdin().read_line(&mut include_input)?;
     let include_input = include_input.trim();
@@ -117,8 +124,8 @@ fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
         include_input.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
 
-    write!(stdout, "Exclude patterns (default: none): ")?;
-    stdout.flush()?;
+    write!(stderr, "Exclude patterns (default: none): ")?;
+    stderr.flush()?;
     let mut exclude_input = String::new();
     io::stdin().read_line(&mut exclude_input)?;
     let exclude_input = exclude_input.trim();
