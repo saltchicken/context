@@ -62,6 +62,7 @@ pub struct FsData {
     pub project_name: String,
     pub tree: String,
     pub files: Vec<FileData>,
+    pub git_diff: Option<String>,
 }
 
 fn load_presets_file() -> Result<PresetsFile> {
@@ -406,7 +407,7 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig) -> FsData {
+fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig, git_diff: Option<String>) -> FsData {
     let mut tree_out = String::new();
 
     // If absolute paths are used, we typically don't want a deeply nested tree
@@ -488,6 +489,7 @@ fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConf
         project_name,
         tree: tree_out.trim_end().to_string(),
         files,
+        git_diff,
     }
 }
 
@@ -556,12 +558,40 @@ pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
     let scanner = Scanner::new(target_dir.to_path_buf(), &config)?;
     let entries = scanner.scan();
 
-    if entries.is_empty() {
+    let mut git_diff = None;
+    if let Some(branch) = &args.diff {
+        let git_root = if args.no_git_root {
+            target_dir.to_path_buf()
+        } else {
+            find_git_root(target_dir).unwrap_or_else(|| target_dir.to_path_buf())
+        };
+
+        match std::process::Command::new("git")
+            .current_dir(&git_root)
+            .args(["diff", branch])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let diff_str = String::from_utf8_lossy(&output.stdout).to_string();
+                if !diff_str.trim().is_empty() {
+                    git_diff = Some(diff_str);
+                }
+            }
+            Ok(output) => {
+                log::warn!("Git diff failed: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            Err(e) => {
+                log::warn!("Failed to execute git diff: {}", e);
+            }
+        }
+    }
+
+    if entries.is_empty() && git_diff.is_none() {
         return Ok(None);
     }
 
     let resolved_name = project_name.unwrap_or("unknown").to_string();
-    let data = gather_data(resolved_name, &entries, &config);
+    let data = gather_data(resolved_name, &entries, &config, git_diff);
     Ok(Some(data))
 }
 

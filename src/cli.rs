@@ -68,4 +68,8 @@ pub struct Cli {
     /// Output absolute paths instead of relative paths in the tree and file blocks
     #[arg(long, help_heading = "File Scanning")]
     pub absolute_paths: bool,
+
+    /// Compare the current state with another git branch or ref (e.g., 'main' or 'origin/main')
+    #[arg(long, help_heading = "Git Options")]
+    pub diff: Option<String>,
 }
