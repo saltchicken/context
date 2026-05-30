@@ -53,8 +53,8 @@ fn estimate_capacity(
         for fs_item in fs_list {
             cap += fs_item.project_name.len() + 64; // Capacity for project tags
             cap += fs_item.tree.len() + 64;
-            if let Some(diff) = &fs_item.git_diff {
-                cap += diff.len() + 64;
+            if let Some((target, diff)) = &fs_item.git_diff {
+                cap += target.len() + diff.len() + 64;
             }
             for f in &fs_item.files {
                 cap += f.path.len()
@@ -129,8 +129,8 @@ pub fn format_output(
                 out.push_str("</file_contents>\n");
             }
 
-            if let Some(diff) = &fs_item.git_diff {
-                out.push_str("<git_diff>\n");
+            if let Some((target, diff)) = &fs_item.git_diff {
+                let _ = write!(out, "<git_diff target=\"{}\">\n", escape_xml(target));
                 out.push_str(diff);
                 if !diff.ends_with('\n') {
                     out.push('\n');

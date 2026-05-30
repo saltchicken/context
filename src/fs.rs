@@ -62,7 +62,7 @@ pub struct FsData {
     pub project_name: String,
     pub tree: String,
     pub files: Vec<FileData>,
-    pub git_diff: Option<String>,
+    pub git_diff: Option<(String, String)>,
 }
 
 fn load_presets_file() -> Result<PresetsFile> {
@@ -407,7 +407,7 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig, git_diff: Option<String>) -> FsData {
+fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig, git_diff: Option<(String, String)>) -> FsData {
     let mut tree_out = String::new();
 
     // If absolute paths are used, we typically don't want a deeply nested tree
@@ -574,7 +574,7 @@ pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
             Ok(output) if output.status.success() => {
                 let diff_str = String::from_utf8_lossy(&output.stdout).to_string();
                 if !diff_str.trim().is_empty() {
-                    git_diff = Some(diff_str);
+                    git_diff = Some((branch.clone(), diff_str));
                 }
             }
             Ok(output) => {
