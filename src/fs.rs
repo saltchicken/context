@@ -578,10 +578,10 @@ pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
                 }
             }
             Ok(output) => {
-                log::warn!("Git diff failed: {}", String::from_utf8_lossy(&output.stderr));
+                anyhow::bail!("Git diff failed: {}", String::from_utf8_lossy(&output.stderr));
             }
             Err(e) => {
-                log::warn!("Failed to execute git diff: {}", e);
+                anyhow::bail!("Failed to execute git diff: {}", e);
             }
         }
     }
@@ -603,7 +603,7 @@ pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec
         match gather(dir, args) {
             Ok(Some(data)) => results.push(data),
             Ok(None) => {}, // Skip if empty
-            Err(e) => log::warn!("Failed to gather context for {:?}: {}", dir, e),
+            Err(e) => anyhow::bail!("Failed to gather context for {:?}: {}", dir, e),
         }
     }
 

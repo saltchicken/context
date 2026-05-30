@@ -87,7 +87,7 @@ fn main() -> Result<()> {
             context_found = true;
         }
         Ok(None) => log::info!("No file content found matching criteria."),
-        Err(e) => log::error!("❌ Code scanner error: {:#}", e),
+        Err(e) => anyhow::bail!("❌ Code scanner error: {:#}", e),
     }
 
     // Checking if we got nothing out of the process AND there's no custom prompt
