@@ -100,7 +100,8 @@ fn main() -> Result<()> {
     // 2. Gather explicitly included standalone files
     let extra_files = fs::resolve_extra_files(&cli, fallback_preset)?;
     if !extra_files.is_empty() {
-        match fs::gather_extra_files(&extra_files) {
+        // Pass cli.tree here so it obeys tree_only_output
+        match fs::gather_extra_files(&extra_files, cli.tree) {
             Ok(Some(data)) => {
                 all_fs_data.push(data);
                 context_found = true;

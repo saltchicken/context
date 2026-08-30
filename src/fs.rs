@@ -670,7 +670,7 @@ pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec
     }
 }
 
-pub fn gather_extra_files(files: &[PathBuf]) -> Result<Option<FsData>> {
+pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<FsData>> {
     if files.is_empty() {
         return Ok(None);
     }
@@ -686,61 +686,67 @@ pub fn gather_extra_files(files: &[PathBuf]) -> Result<Option<FsData>> {
             .into_owned();
 
         if !path.exists() {
-            file_data_list.push(FileData {
-                path: display_path.clone(),
-                content: None,
-                error: Some("File does not exist.".into()),
-                skipped: None,
-            });
+            if !tree_only {
+                file_data_list.push(FileData {
+                    path: display_path.clone(),
+                    content: None,
+                    error: Some("File does not exist.".into()),
+                    skipped: None,
+                });
+            }
             tree_out.push_str(&format!("{} (not found)\n", display_path));
             continue;
         }
 
         if path.is_dir() {
-            file_data_list.push(FileData {
-                path: display_path.clone(),
-                content: None,
-                error: Some("Expected a file, but found a directory.".into()),
-                skipped: None,
-            });
+            if !tree_only {
+                file_data_list.push(FileData {
+                    path: display_path.clone(),
+                    content: None,
+                    error: Some("Expected a file, but found a directory.".into()),
+                    skipped: None,
+                });
+            }
             tree_out.push_str(&format!("{}/\n", display_path));
             continue;
         }
 
         tree_out.push_str(&format!("{}\n", display_path));
 
-        match read_text_file(path) {
-            Ok(FileReadResult::Text(content)) => {
-                file_data_list.push(FileData {
-                    path: display_path,
-                    content: Some(content),
-                    error: None,
-                    skipped: None,
-                });
-            }
-            Ok(FileReadResult::Binary) => {
-                file_data_list.push(FileData {
-                    path: display_path,
-                    content: None,
-                    error: None,
-                    skipped: Some("Binary file detected.".into()),
-                });
-            }
-            Ok(FileReadResult::NonUtf8) => {
-                file_data_list.push(FileData {
-                    path: display_path,
-                    content: None,
-                    error: None,
-                    skipped: Some("Non-UTF-8 text / binary file detected.".into()),
-                });
-            }
-            Err(e) => {
-                file_data_list.push(FileData {
-                    path: display_path,
-                    content: None,
-                    error: Some(format!("Error reading file: {}", e)),
-                    skipped: None,
-                });
+        if !tree_only {
+            match read_text_file(path) {
+                Ok(FileReadResult::Text(content)) => {
+                    file_data_list.push(FileData {
+                        path: display_path,
+                        content: Some(content),
+                        error: None,
+                        skipped: None,
+                    });
+                }
+                Ok(FileReadResult::Binary) => {
+                    file_data_list.push(FileData {
+                        path: display_path,
+                        content: None,
+                        error: None,
+                        skipped: Some("Binary file detected.".into()),
+                    });
+                }
+                Ok(FileReadResult::NonUtf8) => {
+                    file_data_list.push(FileData {
+                        path: display_path,
+                        content: None,
+                        error: None,
+                        skipped: Some("Non-UTF-8 text / binary file detected.".into()),
+                    });
+                }
+                Err(e) => {
+                    file_data_list.push(FileData {
+                        path: display_path,
+                        content: None,
+                        error: Some(format!("Error reading file: {}", e)),
+                        skipped: None,
+                    });
+                }
             }
         }
     }
