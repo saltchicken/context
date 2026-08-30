@@ -13,6 +13,10 @@ pub struct Cli {
     #[arg(default_value = ".", num_args = 1..)]
     pub paths: Vec<PathBuf>,
 
+    /// Additional individual files to include in the context (e.g., external config files)
+    #[arg(short = 'f', long = "file", help_heading = "File Scanning")]
+    pub extra_files: Option<Vec<PathBuf>>,
+
     /// Suppress stderr output (e.g., stats and info logs)
     #[arg(short, long, help_heading = "Output Options")]
     pub quiet: bool,

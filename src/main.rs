@@ -77,17 +77,29 @@ fn main() -> Result<()> {
     // Resolve target directories after merging config and CLI arguments
     let target_dirs = fs::resolve_target_dirs(&cli)?;
 
-    let mut fs_data = None;
+    let mut all_fs_data = Vec::new();
     let mut context_found = false;
 
     // 1. Gather File/Code Context across multiple directories
     match fs::gather_multiple(&target_dirs, &cli) {
-        Ok(Some(data)) => {
-            fs_data = Some(data);
+        Ok(Some(mut data)) => {
+            all_fs_data.append(&mut data);
             context_found = true;
         }
-        Ok(None) => log::info!("No file content found matching criteria."),
+        Ok(None) => log::info!("No file content found matching criteria in directories."),
         Err(e) => anyhow::bail!("❌ Code scanner error: {:#}", e),
+    }
+
+    // 2. Gather explicitly included standalone files
+    if let Some(extra_files) = &cli.extra_files {
+        match fs::gather_extra_files(extra_files) {
+            Ok(Some(data)) => {
+                all_fs_data.push(data);
+                context_found = true;
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("Failed to read extra files: {}", e),
+        }
     }
 
     // Checking if we got nothing out of the process AND there's no custom prompt
@@ -96,12 +108,14 @@ fn main() -> Result<()> {
     }
 
     // Build the final output natively in the format
+    let fs_data_ref = if all_fs_data.is_empty() { None } else { Some(all_fs_data.as_slice()) };
+    
     let output = format::format_output(
         final_instructions
             .as_deref()
             .filter(|s| !s.trim().is_empty()),
         final_prompt.as_deref().filter(|s| !s.trim().is_empty()),
-        fs_data.as_deref(), // Using deref to access the slice of projects
+        fs_data_ref, 
     );
     let trimmed_output = output.trim();
 
