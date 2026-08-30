@@ -102,8 +102,26 @@ fn main() -> Result<()> {
     if !extra_files.is_empty() {
         // Pass cli.tree here so it obeys tree_only_output
         match fs::gather_extra_files(&extra_files, cli.tree) {
-            Ok(Some(data)) => {
-                all_fs_data.push(data);
+            Ok(Some((extra_tree, mut extra_file_data))) => {
+                if let Some(first_project) = all_fs_data.first_mut() {
+                    // Append extra files' tree output at the root level of the existing tree
+                    if !first_project.tree.is_empty() && !extra_tree.is_empty() {
+                        first_project.tree.push('\n');
+                    }
+                    first_project.tree.push_str(&extra_tree);
+                    
+                    // Add the files directly to the main project
+                    first_project.files.append(&mut extra_file_data);
+                } else {
+                    // If no project directory matched, create a project explicitly for these files
+                    let project_name = fallback_preset.unwrap_or("project").to_string();
+                    all_fs_data.push(fs::FsData {
+                        project_name,
+                        tree: extra_tree,
+                        files: extra_file_data,
+                        git_diff: None,
+                    });
+                }
                 context_found = true;
             }
             Ok(None) => {}

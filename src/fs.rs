@@ -81,6 +81,21 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+pub fn shrink_tilde(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(stripped) = canonical.strip_prefix(&home) {
+            let stripped_str = stripped.to_string_lossy();
+            if stripped_str.is_empty() {
+                return "~".to_string();
+            } else {
+                return format!("~/{}", stripped_str);
+            }
+        }
+    }
+    canonical.to_string_lossy().into_owned()
+}
+
 fn load_presets_file() -> Result<PresetsFile> {
     let config_dir = dirs::config_dir().context("Could not determine config directory")?;
     let context_dir = config_dir.join("context");
@@ -670,7 +685,7 @@ pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec
     }
 }
 
-pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<FsData>> {
+pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<(String, Vec<FileData>)>> {
     if files.is_empty() {
         return Ok(None);
     }
@@ -679,13 +694,13 @@ pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<F
     let mut tree_out = String::new();
 
     for path in files {
-        let display_path = path
+        let canonical_path = path
             .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .into_owned();
+            .unwrap_or_else(|_| path.to_path_buf());
+            
+        let display_path = shrink_tilde(path);
 
-        if !path.exists() {
+        if !canonical_path.exists() {
             if !tree_only {
                 file_data_list.push(FileData {
                     path: display_path.clone(),
@@ -698,7 +713,7 @@ pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<F
             continue;
         }
 
-        if path.is_dir() {
+        if canonical_path.is_dir() {
             if !tree_only {
                 file_data_list.push(FileData {
                     path: display_path.clone(),
@@ -714,7 +729,7 @@ pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<F
         tree_out.push_str(&format!("{}\n", display_path));
 
         if !tree_only {
-            match read_text_file(path) {
+            match read_text_file(&canonical_path) {
                 Ok(FileReadResult::Text(content)) => {
                     file_data_list.push(FileData {
                         path: display_path,
@@ -751,10 +766,5 @@ pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<F
         }
     }
 
-    Ok(Some(FsData {
-        project_name: "External Files".to_string(),
-        tree: tree_out.trim_end().to_string(),
-        files: file_data_list,
-        git_diff: None,
-    }))
+    Ok(Some((tree_out.trim_end().to_string(), file_data_list)))
 }
