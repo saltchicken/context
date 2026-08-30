@@ -15,8 +15,9 @@ fn main() -> Result<()> {
     // Load prompt file if specified
     let mut final_prompt = cli.prompt.clone();
     if let Some(prompt_path) = &cli.prompt_file {
-        let file_content = std::fs::read_to_string(prompt_path)
-            .with_context(|| format!("Failed to read prompt file: {:?}", prompt_path))?;
+        let expanded_prompt_path = fs::expand_tilde(prompt_path);
+        let file_content = std::fs::read_to_string(&expanded_prompt_path)
+            .with_context(|| format!("Failed to read prompt file: {:?}", expanded_prompt_path))?;
 
         if let Some(existing) = &mut final_prompt {
             existing.push_str("\n\n");
@@ -77,6 +78,12 @@ fn main() -> Result<()> {
     // Resolve target directories after merging config and CLI arguments
     let target_dirs = fs::resolve_target_dirs(&cli)?;
 
+    // Use the first target directory's name as the fallback preset for standalone files
+    let fallback_preset = target_dirs
+        .first()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str());
+
     let mut all_fs_data = Vec::new();
     let mut context_found = false;
 
@@ -91,8 +98,9 @@ fn main() -> Result<()> {
     }
 
     // 2. Gather explicitly included standalone files
-    if let Some(extra_files) = &cli.extra_files {
-        match fs::gather_extra_files(extra_files) {
+    let extra_files = fs::resolve_extra_files(&cli, fallback_preset)?;
+    if !extra_files.is_empty() {
+        match fs::gather_extra_files(&extra_files) {
             Ok(Some(data)) => {
                 all_fs_data.push(data);
                 context_found = true;

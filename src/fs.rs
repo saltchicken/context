@@ -23,6 +23,7 @@ struct PresetConfig {
     include: Option<Vec<String>>,
     exclude: Option<Vec<String>>,
     include_in_tree: Option<Vec<String>>,
+    file: Option<Vec<String>>,
 }
 
 /// Represents the final configuration after merging presets and CLI args.
@@ -65,6 +66,21 @@ pub struct FsData {
     pub git_diff: Option<(String, String)>,
 }
 
+pub fn expand_tilde(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with("~/") {
+        if let Some(mut home) = dirs::home_dir() {
+            home.push(&path_str[2..]);
+            return home;
+        }
+    } else if path_str == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    path.to_path_buf()
+}
+
 fn load_presets_file() -> Result<PresetsFile> {
     let config_dir = dirs::config_dir().context("Could not determine config directory")?;
     let context_dir = config_dir.join("context");
@@ -96,13 +112,12 @@ fn combine_lists(lists: Vec<Option<Vec<String>>>) -> Vec<String> {
 }
 
 fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
-    // Safety check: Don't prompt if stdin isn't a terminal (e.g., if piped from another command)
+    // Safety check: Don't prompt if stdin isn't a terminal
     if !io::stdin().is_terminal() {
         log::warn!("No preset found for '{}' and stdin is not a terminal. Skipping initialization.", preset_name);
         return Ok(PresetConfig::default());
     }
 
-    // Use stderr instead of stdout so the prompt remains visible when piping to wl-copy
     let mut stderr = io::stderr();
     write!(stderr, "⚠️ No preset found for '{}'. Initialize one? [y/N]: ", preset_name)?;
     stderr.flush()?;
@@ -146,6 +161,7 @@ fn prompt_and_create_preset(preset_name: &str) -> Result<PresetConfig> {
         include: Some(include_vec.clone()),
         exclude: exclude_vec.clone(),
         include_in_tree: None,
+        file: None,
     };
 
     if let Some(config_dir) = dirs::config_dir() {
@@ -250,6 +266,48 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
     )
 }
 
+/// Resolves extra files to include from both presets and CLI arguments, expanding '~' paths.
+pub fn resolve_extra_files(args: &Cli, fallback_preset: Option<&str>) -> Result<Vec<PathBuf>> {
+    let presets_file = load_presets_file().unwrap_or_default();
+    
+    let global = presets_file.global;
+    
+    // Use the explicit preset if provided, otherwise fallback to the directory name
+    let selected_preset = args.preset.as_deref().or(fallback_preset);
+    
+    let preset = if let Some(name) = selected_preset {
+        presets_file.presets.get(name).cloned().unwrap_or_default()
+    } else {
+        PresetConfig::default()
+    };
+
+    let mut all_files = Vec::new();
+
+    for list in [global.file, preset.file] {
+        if let Some(files) = list {
+            for f in files {
+                all_files.push(expand_tilde(Path::new(&f)));
+            }
+        }
+    }
+
+    if let Some(cli_files) = &args.extra_files {
+        for f in cli_files {
+            all_files.push(expand_tilde(f));
+        }
+    }
+
+    // Deduplicate
+    let mut unique = Vec::new();
+    for f in all_files {
+        if !unique.contains(&f) {
+            unique.push(f);
+        }
+    }
+
+    Ok(unique)
+}
+
 fn is_binary_bytes(data: &[u8]) -> bool {
     if data.contains(&0) {
         return true;
@@ -274,7 +332,7 @@ fn read_text_file(path: &Path) -> std::io::Result<FileReadResult> {
     use std::io::Read;
     let mut file = fs::File::open(path)?;
 
-    // Optimizing Capacity Allocations: Avoid extending arrays and reallocating heavily in a loop.
+    // Optimizing Capacity Allocations
     let metadata = file.metadata()?;
     let file_size = metadata.len() as usize;
 
@@ -410,9 +468,6 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConfig, git_diff: Option<(String, String)>) -> FsData {
     let mut tree_out = String::new();
 
-    // If absolute paths are used, we typically don't want a deeply nested tree
-    // because each path is self-contained. For now, we'll keep the visual indentation
-    // but the node text will be the full absolute path.
     for entry in entries {
         let indent = "    ".repeat(entry.depth.saturating_sub(1));
         
@@ -493,7 +548,6 @@ fn gather_data(project_name: String, entries: &[FileEntry], config: &RuntimeConf
     }
 }
 
-/// Helper function to traverse upwards and find the git root
 pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     for ancestor in start_path.ancestors() {
         if ancestor.join(".git").exists() {
@@ -508,16 +562,20 @@ pub fn resolve_target_dirs(args: &Cli) -> Result<Vec<PathBuf>> {
 
     for path_str in &args.paths {
         let current_dir = env::current_dir().context("Failed to get current directory")?;
-        let initial_target = current_dir.join(path_str);
+        
+        let expanded = expand_tilde(path_str);
+        let initial_target = if expanded.is_absolute() {
+            expanded
+        } else {
+            current_dir.join(expanded)
+        };
 
         let mut target_dir = initial_target.canonicalize().unwrap_or(initial_target);
 
-        // Follow git root logic by default unless disabled
         if !args.no_git_root {
             if let Some(git_root) = find_git_root(&target_dir) {
                 target_dir = git_root;
             } else {
-                // FAIL explicitly if no .git directory is found in the path's ancestors
                 anyhow::bail!(
                     "Could not find a .git repository root for {:?}. Run with --no-git-root (or --cwd) to force scanning the local directory anyway.", 
                     target_dir
@@ -525,7 +583,6 @@ pub fn resolve_target_dirs(args: &Cli) -> Result<Vec<PathBuf>> {
             }
         }
 
-        // Deduplicate
         if !resolved.contains(&target_dir) {
             resolved.push(target_dir);
         }
@@ -595,7 +652,6 @@ pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
     Ok(Some(data))
 }
 
-/// Wraps the single `gather` function to aggregate multiple projects
 pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec<FsData>>> {
     let mut results = Vec::new();
 
@@ -614,7 +670,6 @@ pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec
     }
 }
 
-/// Gathers explicitly requested external files, bypassing the directory walker and git checks.
 pub fn gather_extra_files(files: &[PathBuf]) -> Result<Option<FsData>> {
     if files.is_empty() {
         return Ok(None);
@@ -624,7 +679,6 @@ pub fn gather_extra_files(files: &[PathBuf]) -> Result<Option<FsData>> {
     let mut tree_out = String::new();
 
     for path in files {
-        // Use canonicalize to get the absolute path (also resolves `~` if the shell didn't fully expand it)
         let display_path = path
             .canonicalize()
             .unwrap_or_else(|_| path.to_path_buf())
