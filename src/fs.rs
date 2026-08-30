@@ -4,7 +4,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pathdiff::diff_paths;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write, IsTerminal};
@@ -281,8 +281,7 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
     )
 }
 
-/// Resolves extra files to include from both presets and CLI arguments, expanding '~' paths.
-pub fn resolve_extra_files(args: &Cli, fallback_preset: Option<&str>) -> Result<Vec<PathBuf>> {
+fn resolve_extra_files(args: &Cli, fallback_preset: Option<&str>) -> Result<Vec<PathBuf>> {
     let presets_file = load_presets_file().unwrap_or_default();
     
     let global = presets_file.global;
@@ -606,86 +605,7 @@ pub fn resolve_target_dirs(args: &Cli) -> Result<Vec<PathBuf>> {
     Ok(resolved)
 }
 
-pub fn gather(target_dir: &Path, args: &Cli) -> Result<Option<FsData>> {
-    if !target_dir.exists() {
-        anyhow::bail!("Target directory does not exist: {:?}", target_dir);
-    }
-
-    let project_name = target_dir.file_name().and_then(|n| n.to_str());
-    let config = resolve_config(args, project_name)?;
-
-    if !config.force {
-        if let Some(home) = dirs::home_dir() {
-            if target_dir == home.canonicalize().unwrap_or_else(|_| home.clone()) {
-                anyhow::bail!("Cowardly refusing to scan the entire home directory. Use --force to override, or specify a narrower path/include pattern.");
-            }
-        }
-        if target_dir == PathBuf::from("/") {
-            anyhow::bail!(
-                "Cowardly refusing to scan the entire root directory. Use --force to override."
-            );
-        }
-    }
-
-    let scanner = Scanner::new(target_dir.to_path_buf(), &config)?;
-    let entries = scanner.scan();
-
-    let mut git_diff = None;
-    if let Some(branch) = &args.diff {
-        let git_root = if args.no_git_root {
-            target_dir.to_path_buf()
-        } else {
-            find_git_root(target_dir).unwrap_or_else(|| target_dir.to_path_buf())
-        };
-
-        match std::process::Command::new("git")
-            .current_dir(&git_root)
-            .args(["diff", branch])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let diff_str = String::from_utf8_lossy(&output.stdout).to_string();
-                if !diff_str.trim().is_empty() {
-                    git_diff = Some((branch.clone(), diff_str));
-                }
-            }
-            Ok(output) => {
-                anyhow::bail!("Git diff failed: {}", String::from_utf8_lossy(&output.stderr));
-            }
-            Err(e) => {
-                anyhow::bail!("Failed to execute git diff: {}", e);
-            }
-        }
-    }
-
-    if entries.is_empty() && git_diff.is_none() {
-        return Ok(None);
-    }
-
-    let resolved_name = project_name.unwrap_or("unknown").to_string();
-    let data = gather_data(resolved_name, &entries, &config, git_diff);
-    Ok(Some(data))
-}
-
-pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec<FsData>>> {
-    let mut results = Vec::new();
-
-    for dir in target_dirs {
-        match gather(dir, args) {
-            Ok(Some(data)) => results.push(data),
-            Ok(None) => {}, // Skip if empty
-            Err(e) => anyhow::bail!("Failed to gather context for {:?}: {}", dir, e),
-        }
-    }
-
-    if results.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(results))
-    }
-}
-
-pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<(String, Vec<FileData>)>> {
+fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<(String, Vec<FileData>)>> {
     if files.is_empty() {
         return Ok(None);
     }
@@ -767,4 +687,104 @@ pub fn gather_extra_files(files: &[PathBuf], tree_only: bool) -> Result<Option<(
     }
 
     Ok(Some((tree_out.trim_end().to_string(), file_data_list)))
+}
+
+pub fn gather(
+    target_dir: &Path, 
+    args: &Cli,
+    seen_extra_files: &mut HashSet<PathBuf>,
+) -> Result<Option<FsData>> {
+    if !target_dir.exists() {
+        anyhow::bail!("Target directory does not exist: {:?}", target_dir);
+    }
+
+    let project_name = target_dir.file_name().and_then(|n| n.to_str());
+    let config = resolve_config(args, project_name)?;
+
+    if !config.force {
+        if let Some(home) = dirs::home_dir() {
+            if target_dir == home.canonicalize().unwrap_or_else(|_| home.clone()) {
+                anyhow::bail!("Cowardly refusing to scan the entire home directory. Use --force to override, or specify a narrower path/include pattern.");
+            }
+        }
+        if target_dir == PathBuf::from("/") {
+            anyhow::bail!(
+                "Cowardly refusing to scan the entire root directory. Use --force to override."
+            );
+        }
+    }
+
+    let scanner = Scanner::new(target_dir.to_path_buf(), &config)?;
+    let entries = scanner.scan();
+
+    let mut git_diff = None;
+    if let Some(branch) = &args.diff {
+        let git_root = if args.no_git_root {
+            target_dir.to_path_buf()
+        } else {
+            find_git_root(target_dir).unwrap_or_else(|| target_dir.to_path_buf())
+        };
+
+        match std::process::Command::new("git")
+            .current_dir(&git_root)
+            .args(["diff", branch])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let diff_str = String::from_utf8_lossy(&output.stdout).to_string();
+                if !diff_str.trim().is_empty() {
+                    git_diff = Some((branch.clone(), diff_str));
+                }
+            }
+            Ok(output) => {
+                anyhow::bail!("Git diff failed: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to execute git diff: {}", e);
+            }
+        }
+    }
+
+    // Process external files specifically assigned to this project via presets or CLI overrides,
+    // skipping any files we have already appended to another project in this run.
+    let mut extra_files = resolve_extra_files(args, project_name)?;
+    extra_files.retain(|f| seen_extra_files.insert(f.clone()));
+
+    if entries.is_empty() && git_diff.is_none() && extra_files.is_empty() {
+        return Ok(None);
+    }
+
+    let resolved_name = project_name.unwrap_or("unknown").to_string();
+    let mut data = gather_data(resolved_name, &entries, &config, git_diff);
+
+    if !extra_files.is_empty() {
+        if let Ok(Some((extra_tree, mut extra_file_data))) = gather_extra_files(&extra_files, config.tree_only_output) {
+            if !data.tree.is_empty() && !extra_tree.is_empty() {
+                data.tree.push('\n');
+            }
+            data.tree.push_str(&extra_tree);
+            data.files.append(&mut extra_file_data);
+        }
+    }
+
+    Ok(Some(data))
+}
+
+pub fn gather_multiple(target_dirs: &[PathBuf], args: &Cli) -> Result<Option<Vec<FsData>>> {
+    let mut results = Vec::new();
+    let mut seen_extra_files = HashSet::new();
+
+    for dir in target_dirs {
+        match gather(dir, args, &mut seen_extra_files) {
+            Ok(Some(data)) => results.push(data),
+            Ok(None) => {}, // Skip if empty
+            Err(e) => anyhow::bail!("Failed to gather context for {:?}: {}", dir, e),
+        }
+    }
+
+    if results.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(results))
+    }
 }

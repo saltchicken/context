@@ -78,16 +78,11 @@ fn main() -> Result<()> {
     // Resolve target directories after merging config and CLI arguments
     let target_dirs = fs::resolve_target_dirs(&cli)?;
 
-    // Use the first target directory's name as the fallback preset for standalone files
-    let fallback_preset = target_dirs
-        .first()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str());
-
     let mut all_fs_data = Vec::new();
     let mut context_found = false;
 
     // 1. Gather File/Code Context across multiple directories
+    // External files tied to directories via presets (or CLI args) are appended directly inside the respective projects
     match fs::gather_multiple(&target_dirs, &cli) {
         Ok(Some(mut data)) => {
             all_fs_data.append(&mut data);
@@ -95,38 +90,6 @@ fn main() -> Result<()> {
         }
         Ok(None) => log::info!("No file content found matching criteria in directories."),
         Err(e) => anyhow::bail!("❌ Code scanner error: {:#}", e),
-    }
-
-    // 2. Gather explicitly included standalone files
-    let extra_files = fs::resolve_extra_files(&cli, fallback_preset)?;
-    if !extra_files.is_empty() {
-        // Pass cli.tree here so it obeys tree_only_output
-        match fs::gather_extra_files(&extra_files, cli.tree) {
-            Ok(Some((extra_tree, mut extra_file_data))) => {
-                if let Some(first_project) = all_fs_data.first_mut() {
-                    // Append extra files' tree output at the root level of the existing tree
-                    if !first_project.tree.is_empty() && !extra_tree.is_empty() {
-                        first_project.tree.push('\n');
-                    }
-                    first_project.tree.push_str(&extra_tree);
-                    
-                    // Add the files directly to the main project
-                    first_project.files.append(&mut extra_file_data);
-                } else {
-                    // If no project directory matched, create a project explicitly for these files
-                    let project_name = fallback_preset.unwrap_or("project").to_string();
-                    all_fs_data.push(fs::FsData {
-                        project_name,
-                        tree: extra_tree,
-                        files: extra_file_data,
-                        git_diff: None,
-                    });
-                }
-                context_found = true;
-            }
-            Ok(None) => {}
-            Err(e) => log::warn!("Failed to read extra files: {}", e),
-        }
     }
 
     // Checking if we got nothing out of the process AND there's no custom prompt
