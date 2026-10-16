@@ -37,6 +37,7 @@ pub struct RuntimeConfig {
     pub max_files: usize,
     pub force: bool,
     pub absolute_paths: bool,
+    pub no_git_root: bool,
 }
 
 /// Represents a single file discovered during the scan.
@@ -210,6 +211,7 @@ pub fn build_config(
     max_files: usize,
     force: bool,
     absolute_paths: bool,
+    no_git_root: bool,
 ) -> Result<RuntimeConfig> {
     let presets_file = load_presets_file().unwrap_or_default();
 
@@ -262,6 +264,7 @@ pub fn build_config(
         max_files,
         force,
         absolute_paths,
+        no_git_root,
     })
 }
 
@@ -278,6 +281,7 @@ pub fn resolve_config(args: &Cli, fallback_preset: Option<&str>) -> Result<Runti
         args.max_files,
         args.force,
         args.absolute_paths,
+        args.no_git_root,
     )
 }
 
@@ -379,6 +383,7 @@ pub struct Scanner {
     max_size: u64,
     max_files: usize,
     absolute_paths: bool,
+    no_git_root: bool,
 }
 
 impl Scanner {
@@ -391,14 +396,18 @@ impl Scanner {
             max_size: config.max_size,
             max_files: config.max_files,
             absolute_paths: config.absolute_paths,
+            no_git_root: config.no_git_root,
         })
     }
 
     pub fn scan(&self) -> Vec<FileEntry> {
         let mut entries = Vec::new();
+        
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
-            .git_ignore(true)
+            .git_ignore(!self.no_git_root)
+            .git_global(!self.no_git_root)
+            .git_exclude(!self.no_git_root)
             .build();
 
         for result in walker {
