@@ -8,8 +8,8 @@ fn main() -> Result<()> {
     // Parse the unified global CLI options first so we can check for flags like --quiet
     let mut cli = Cli::parse();
 
-    // Initialize logging (default to warn if quiet is enabled, otherwise info)
-    let default_log_level = if cli.quiet { "warn" } else { "info" };
+    // Initialize logging (default to info if verbose is enabled, otherwise warn)
+    let default_log_level = if cli.verbose { "info" } else { "warn" };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level)).init();
 
     // Load prompt file if specified
@@ -114,7 +114,7 @@ fn main() -> Result<()> {
         println!("{}", trimmed_output);
 
         // Skip printing stats if the user requested the tree view exclusively or enabled quiet mode
-        if !cli.tree && !cli.quiet {
+        if cli.verbose {
             let lines = trimmed_output.lines().count();
             let approx_tokens = trimmed_output.len() / 4;
 

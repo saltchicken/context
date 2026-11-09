@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(short, long, help_heading = "Output Options")]
     pub quiet: bool,
 
+    /// Enable verbose output (e.g., print generation stats to stderr)
+    #[arg(short = 'v', long, help_heading = "Output Options")]
+    pub verbose: bool,
+
     /// Prepend a prompt to the generated context
     #[arg(short, long, help_heading = "Output Options")]
     pub prompt: Option<String>,
