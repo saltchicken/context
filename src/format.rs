@@ -1,6 +1,7 @@
 use crate::fs::FsData;
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::path::Path;
 
 /// Escapes XML characters in a single pass.
 /// Returns `Cow::Borrowed` (no allocation) if no escaping was needed.
@@ -36,6 +37,18 @@ fn escape_xml(input: &str) -> Cow<'_, str> {
     }
 }
 
+/// Checks if a file path likely contains raw HTML/XML that would break a rich-text parser
+fn is_xml_like(path: &str) -> bool {
+    if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
+        matches!(
+            ext.to_lowercase().as_str(),
+            "html" | "htm" | "xml" | "svg" | "jsx" | "tsx" | "vue" | "svelte"
+        )
+    } else {
+        false
+    }
+}
+
 /// Helper to estimate the required buffer capacity to avoid constant re-allocations
 fn estimate_capacity(
     instructions: Option<&str>,
@@ -54,11 +67,19 @@ fn estimate_capacity(
             cap += fs_item.project_name.len() + 64; // Capacity for project tags
             cap += fs_item.tree.len() + 64;
             if let Some((target, diff)) = &fs_item.git_diff {
-                cap += target.len() + diff.len() + 64;
+                cap += target.len() + diff.len() + (diff.len() / 10) + 64;
             }
             for f in &fs_item.files {
+                let content_len = f.content.as_ref().map_or(0, |c| c.len());
+                // Only add the 10% buffer for escaped files
+                let content_cap = if is_xml_like(&f.path) {
+                    content_len + (content_len / 10)
+                } else {
+                    content_len
+                };
+
                 cap += f.path.len()
-                    + f.content.as_ref().map_or(0, |c| c.len())
+                    + content_cap
                     + f.error.as_ref().map_or(0, |e| e.len())
                     + f.skipped.as_ref().map_or(0, |s| s.len())
                     + 128; // Wrapper tags overhead
@@ -119,7 +140,15 @@ pub fn format_output(
                             "<file path=\"{}\">\n",
                             escape_xml(&f.path)
                         );
-                        out.push_str(content);
+                        
+                        // Selectively escape based on file extension
+                        if is_xml_like(&f.path) {
+                            let escaped_content = escape_xml(content);
+                            out.push_str(&escaped_content);
+                        } else {
+                            out.push_str(content);
+                        }
+                        
                         if !content.ends_with('\n') {
                             out.push('\n');
                         }
@@ -131,8 +160,13 @@ pub fn format_output(
 
             if let Some((target, diff)) = &fs_item.git_diff {
                 let _ = write!(out, "<git_diff target=\"{}\">\n", escape_xml(target));
-                out.push_str(diff);
-                if !diff.ends_with('\n') {
+                
+                // Diffs can contain HTML, but parsing exactly which lines need it is tricky.
+                // It is safer to escape diffs universally since they are raw patch data.
+                let escaped_diff = escape_xml(diff);
+                out.push_str(&escaped_diff);
+                
+                if !escaped_diff.ends_with('\n') {
                     out.push('\n');
                 }
                 out.push_str("</git_diff>\n");
